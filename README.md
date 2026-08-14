@@ -33,7 +33,7 @@ cp -r skeletons/ {프로젝트}/.harness/
 cp harness.config.example.mjs {프로젝트}/harness.config.mjs
 
 cd {프로젝트}
-node .harness/danger-guard.mjs --status   # ← 처음엔 "비활성" 이 나와야 정상
+node .harness/danger-guard.mjs --status   # ← "설정됨 · 규칙 없음" 이 나와야 정상 (설정을 복사했으므로)
 # harness.config.mjs 의 다섯 칸만 채운다 (bootstrap §2)
 node .harness/danger-guard.mjs --status   # "활성 — deny N · ask M"
 ```
