@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+/**
+ * 골격 1 — 위험 명령 가드 (설정 주도).
+ *
+ * 규칙은 이 파일에 없다. 전부 `harness.config.mjs` 의 `dangerGuard` 에서 온다.
+ * 이 파일은 **판정 구조**(deny/ask 2단계 · 공유 자원 교집합 · 복구 경로 · 활성 확인)만 갖는다.
+ *
+ * 성격: 차단 게이트라 **fail-closed**. 설정을 못 읽으면 통과시키지 않고 알린다.
+ *       조용히 통과시키면 "가드 없음" 과 "위반 없음" 이 똑같이 보인다.
+ *
+ * ⚠️ 한계 — 패턴 판정은 변수 치환·개행·별칭으로 우회된다.
+ *    **보안 경계가 아니라 실수 방지 장치**다. 악의를 막는 용도로 소개하면 안 된다.
+ *    스크립트 파일 안에 든 명령도 보지 못한다(판정 단위가 명령 문자열이라).
+ *
+ * 사용:
+ *   (훅) stdin 으로 도구 입력 JSON 을 받는다
+ *   node skeletons/danger-guard.mjs --cmd "<명령>"   # 단건 판정
+ *   node skeletons/danger-guard.mjs --status         # 활성 확인 (설정·규칙 수)
+ *
+ * 종료코드: 0 판정 완료(통과 포함) · 2 가드 오류
+ */
+
+import { loadConfig, compile, emitDecision, readStdin, CONFIG_NAME } from './lib/config.mjs';
+
+/** 기본 복구 문구 — 규칙에 `recover` 가 없을 때. 없는 것보다는 낫지만 규칙마다 적는 편이 훨씬 낫다. */
+const DEFAULT_RECOVER = {
+  deny: '다른 방법으로 목적을 이룰 수 있는지 먼저 보고, 정말 필요하면 승인 주체에게 요청하거나 규칙을 고치세요.',
+  ask: '그대로 진행해도 되는 상황인지 확인하고, 남길 것이 있으면 먼저 보존하세요.',
+};
+
+/**
+ * 명령 하나를 판정한다. 순수 함수 — 이 함수 자체를 테스트한다.
+ * @param {string} command
+ * @param {object} config 하네스 설정 전체
+ * @returns {{decision:'deny'|'ask', why:string, recover:string}|null}
+ */
+export function evaluate(command, config) {
+  const g = (config && config.dangerGuard) || {};
+  if (g.enabled === false) return null;
+  if (!command || !command.trim()) return null;
+
+  // deny 가 ask 보다 먼저다 — 더 강한 판정이 이긴다.
+  for (const decision of ['deny', 'ask']) {
+    for (const rule of g[decision] || []) {
+      const c = compile(rule.pattern);
+      if (c.error) {
+        // 규칙 하나가 깨졌다고 나머지를 버리지 않는다. 다만 조용히 넘기지도 않는다.
+        process.stderr.write(`[danger-guard] ${c.error}\n`);
+        continue;
+      }
+      if (c.re.test(command)) {
+        return {
+          decision,
+          why: rule.why || '설정에 사유가 적혀 있지 않습니다.',
+          recover: rule.recover || DEFAULT_RECOVER[decision],
+        };
+      }
+    }
+  }
+
+  // 공유 자원 — "공유 대상" 과 "쓰기 구문" 의 **교집합**일 때만 잡는다.
+  // 둘 중 하나만으로 판정하면 조회까지 막히거나(과잉) 쓰기를 놓친다(과소).
+  const s = g.shared || {};
+  if (s.targetPattern && s.writePattern) {
+    const t = compile(s.targetPattern, 'i');
+    const w = compile(s.writePattern, 'i');
+    if (!t.error && !w.error && t.re.test(command) && w.re.test(command)) {
+      return {
+        decision: 'ask',
+        why: s.why || '공유 환경에 쓰기를 실행합니다.',
+        recover: s.recover || DEFAULT_RECOVER.ask,
+      };
+    }
+  }
+
+  return null;
+}
+
+/** 훅 입력에서 명령 문자열을 꺼낸다. 파싱 실패 시 원문 전체를 훑는다(fail-closed 쪽). */
+export function extractCommand(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    const cmd = parsed?.tool_input?.command;
+    if (typeof cmd === 'string') return cmd;
+  } catch {
+    /* 원문으로 폴백 */
+  }
+  return raw;
+}
+
+function reasonFor(hit) {
+  const head = hit.decision === 'deny' ? '차단됨' : '확인 필요';
+  return `${head} — ${hit.why}\n→ ${hit.recover}`;
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const loaded = await loadConfig();
+
+  if (argv.includes('--status')) {
+    if (!loaded.ok) {
+      process.stdout.write(
+        `[danger-guard] 비활성 — ${CONFIG_NAME} 를 읽지 못했습니다 (${loaded.reason})\n  경로: ${loaded.path}\n`,
+      );
+      process.exit(2);
+    }
+    const g = loaded.config.dangerGuard || {};
+    const shared = g.shared && g.shared.targetPattern && g.shared.writePattern ? '설정됨' : '없음';
+    process.stdout.write(
+      `[danger-guard] 활성 — deny ${(g.deny || []).length} · ask ${(g.ask || []).length} · 공유자원 규칙 ${shared}\n` +
+        `  설정: ${loaded.path}\n`,
+    );
+    process.exit(0);
+  }
+
+  if (!loaded.ok) {
+    // 설정이 없으면 판정할 수 없다. 통과시키되 **반드시 보이게** 남긴다.
+    process.stderr.write(
+      `[danger-guard] 가드가 동작하지 않았습니다 — ${CONFIG_NAME} (${loaded.reason}).\n` +
+        `  '위반 없음' 이 아니라 '검사하지 않음' 입니다. --status 로 확인하세요.\n`,
+    );
+    process.exit(2);
+  }
+
+  const cmdFlag = argv.indexOf('--cmd');
+  const command = cmdFlag >= 0 ? (argv[cmdFlag + 1] ?? '') : extractCommand(readStdin());
+  const hit = evaluate(command, loaded.config);
+  if (!hit) process.exit(0);
+
+  emitDecision(hit.decision, reasonFor(hit));
+  process.exit(0);
+}
+
+if (process.argv[1] && process.argv[1].endsWith('danger-guard.mjs')) {
+  main().catch((e) => {
+    process.stderr.write(`[danger-guard] 가드가 동작하지 않았습니다: ${e.message}\n`);
+    process.exit(2);
+  });
+}

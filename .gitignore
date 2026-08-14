@@ -1,5 +1,8 @@
 # 금칙어 목록은 그 자체가 유출물이다 — 절대 커밋하지 않는다 (번역 규율 §5-5)
 .forbidden-terms.local
 
+# 채워진 설정은 프로젝트의 것이다 — 템플릿 저장소에는 예시만 둔다
+harness.config.mjs
+
 node_modules/
 .DS_Store

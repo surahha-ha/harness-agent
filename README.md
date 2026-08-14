@@ -16,16 +16,36 @@
 | 경로 | 내용 |
 | - | - |
 | `docs/00-translation-discipline.md` | 무엇을 골격으로 올리고 무엇을 프로젝트에 남기나 — **이 저장소의 헌법** |
-| `docs/01-skeletons.md` | 골격 목록 (각각 슬롯 · 절차 · 실패 시나리오) |
-| `tools/scan-forbidden.mjs` | 고유 정보 유입 차단 게이트 |
-| `.githooks/pre-commit` | 위 게이트를 커밋 전에 강제 |
+| `docs/01-skeletons.md` | 골격 7종 (각각 슬롯 · 절차 · 실패 시나리오) |
+| `docs/02-persona-panel.md` | 골격을 반문하는 다섯 렌즈 |
+| `docs/03-panel-review-v0.md` | 그 반문의 결과와 확정된 정책 |
+| `docs/04-bootstrap.md` | **새 프로젝트에 까는 절차 — 첫 30분** |
+| `harness.config.example.mjs` | **모든 슬롯이 모이는 한 곳.** 판별 질문이 슬롯 옆 주석에 있다 |
+| `skeletons/` | 설정을 읽어 도는 골격 구현 |
+| `tools/` · `.githooks/` | 고유 정보 유입 차단 게이트 |
 
-## 시작하기
+## 쓰기 — 새 프로젝트에 깔기
+
+`docs/04-bootstrap.md` 를 따른다. 요지는 이렇다.
 
 ```bash
-git config core.hooksPath .githooks       # 게이트 활성화 (클론 후 1회)
-node tools/scan-forbidden.mjs --all       # 저장소 전체 스캔
-node --test tools/scan-forbidden.test.mjs # 게이트 자체의 테스트
+cp -r skeletons/ {프로젝트}/.harness/
+cp harness.config.example.mjs {프로젝트}/harness.config.mjs
+
+cd {프로젝트}
+node .harness/danger-guard.mjs --status   # ← 처음엔 "비활성" 이 나와야 정상
+# harness.config.mjs 의 다섯 칸만 채운다 (bootstrap §2)
+node .harness/danger-guard.mjs --status   # "활성 — deny N · ask M"
+```
+
+⚠️ **"비활성" 을 한 번 보고 간다.** 미설치와 통과는 겉보기가 같아서, 그 차이를 아는 것이 골격의 핵심이다.
+
+## 개발 — 이 저장소에서
+
+```bash
+git config core.hooksPath .githooks                              # 유입 차단 게이트 활성화
+node tools/scan-forbidden.mjs --all                              # 저장소 전체 스캔
+node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 ```
 
 프로젝트 고유 금칙어(조직명·호스트·식별자 접두어)는 **`.forbidden-terms.local` 에 두고 커밋하지 않는다** —
