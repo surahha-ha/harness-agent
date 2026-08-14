@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# 커밋 전 게이트 — 고유 정보가 저장소에 들어오는 것을 막는다.
+# 활성화: git config core.hooksPath .githooks
+#
+# 이 훅이 없거나 꺼져 있어도 규율은 유효하다. 훅은 규율의 집행 수단이지 규율 자체가 아니다.
+# 우회가 필요하면 --no-verify 가 아니라 검출값을 번역 규율 §3 대로 푼다.
+
+if ! command -v node >/dev/null 2>&1; then
+  # 조용히 통과시키면 게이트가 죽은 걸 아무도 모른다.
+  echo "[pre-commit] node 를 찾지 못해 유입 차단 게이트가 동작하지 않았습니다." >&2
+  exit 1
+fi
+
+node tools/scan-forbidden.mjs || exit 1
