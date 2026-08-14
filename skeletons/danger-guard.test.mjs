@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, extractCommand } from './danger-guard.mjs';
+import { evaluate, extractCommand, statusOf } from './danger-guard.mjs';
 import { compile } from './lib/config.mjs';
 
 /** 합성 설정 — 실제 프로젝트 규칙이 아니라 구조를 보기 위한 최소값. */
@@ -94,6 +94,28 @@ test('⭐ 이스케이프가 소실된 문자열 패턴은 조용히 통과시�
 
 test('패턴이 문자열도 정규식도 아니면 오류로 돌린다', () => {
   assert.ok(compile(42).error);
+});
+
+test('⭐ 규칙이 0개면 active 가 아니라 empty 다 — 거짓 활성은 미설치보다 나쁘다', () => {
+  assert.equal(statusOf({ dangerGuard: { enabled: true } }).state, 'empty');
+  assert.equal(statusOf({ dangerGuard: { enabled: true, deny: [], ask: [] } }).state, 'empty');
+});
+
+test('규칙이 하나라도 있으면 active', () => {
+  assert.equal(statusOf(cfg).state, 'active');
+});
+
+test('공유자원 규칙만 있어도 active 다', () => {
+  const c = { dangerGuard: { enabled: true, shared: { targetPattern: /a/, writePattern: /b/ } } };
+  assert.equal(statusOf(c).state, 'active');
+});
+
+test('enabled:false 는 off — empty 와 구분한다', () => {
+  assert.equal(statusOf({ dangerGuard: { enabled: false, deny: [{}] } }).state, 'off');
+});
+
+test('설정 자체가 없어도 상태 판정이 죽지 않는다', () => {
+  assert.equal(statusOf(undefined).state, 'empty');
 });
 
 test('훅 입력 JSON 에서 명령을 꺼낸다', () => {

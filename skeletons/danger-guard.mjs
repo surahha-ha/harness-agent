@@ -76,6 +76,25 @@ export function evaluate(command, config) {
   return null;
 }
 
+/**
+ * 활성 상태 판정 — 네 가지를 구분한다. 순수 함수라 테스트할 수 있다.
+ *
+ * ⭐ `empty` 를 `active` 와 구분하는 것이 핵심이다. 설정이 있다는 이유로 "활성" 이라 보고하면
+ *    아무것도 막지 않는데 보호받는다고 믿게 된다 — **미설치보다 나쁘다.**
+ *    미설치는 의심이라도 하지만, 거짓 활성은 안심시킨다.
+ *
+ * @returns {{state:'off'|'empty'|'active', deny:number, ask:number, shared:boolean}}
+ */
+export function statusOf(config) {
+  const g = (config && config.dangerGuard) || {};
+  const deny = (g.deny || []).length;
+  const ask = (g.ask || []).length;
+  const shared = !!(g.shared && g.shared.targetPattern && g.shared.writePattern);
+  if (g.enabled === false) return { state: 'off', deny, ask, shared };
+  if (deny + ask === 0 && !shared) return { state: 'empty', deny, ask, shared };
+  return { state: 'active', deny, ask, shared };
+}
+
 /** 훅 입력에서 명령 문자열을 꺼낸다. 파싱 실패 시 원문 전체를 훑는다(fail-closed 쪽). */
 export function extractCommand(raw) {
   try {
@@ -104,13 +123,17 @@ async function main() {
       );
       process.exit(2);
     }
-    const g = loaded.config.dangerGuard || {};
-    const shared = g.shared && g.shared.targetPattern && g.shared.writePattern ? '설정됨' : '없음';
-    process.stdout.write(
-      `[danger-guard] 활성 — deny ${(g.deny || []).length} · ask ${(g.ask || []).length} · 공유자원 규칙 ${shared}\n` +
-        `  설정: ${loaded.path}\n`,
-    );
-    process.exit(0);
+    const s = statusOf(loaded.config);
+    const detail = `deny ${s.deny} · ask ${s.ask} · 공유자원 규칙 ${s.shared ? '설정됨' : '없음'}`;
+    const line = {
+      off: `[danger-guard] 꺼짐 — enabled:false 입니다 (${detail})\n`,
+      empty:
+        `[danger-guard] 설정됨 · 규칙 없음 — 아무것도 막지 않습니다\n` +
+        `  부트스트랩 §2 의 판별 질문("실행 후 5분 안에 원상복구할 수단이 있나?")으로 2~3개만 채우세요.\n`,
+      active: `[danger-guard] 활성 — ${detail}\n`,
+    }[s.state];
+    process.stdout.write(line + `  설정: ${loaded.path}\n`);
+    process.exit(s.state === 'active' ? 0 : 1);
   }
 
   if (!loaded.ok) {
