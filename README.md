@@ -36,6 +36,10 @@ cd {프로젝트}
 node .harness/danger-guard.mjs --status   # ← "설정됨 · 규칙 없음" 이 나와야 정상 (설정을 복사했으므로)
 # harness.config.mjs 의 다섯 칸만 채운다 (bootstrap §2)
 node .harness/danger-guard.mjs --status   # "활성 — deny N · ask M"
+
+# 나머지 실행 골격은 켜기 전에 잰다 (bootstrap §4 순서)
+node .harness/test-first.mjs --audit      # 경계 안인데 테스트 없는 파일 수를 먼저 센다
+node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — 미러 어긋남 검사
 ```
 
 ⚠️ **"비활성" 을 한 번 보고 간다.** 미설치와 통과는 겉보기가 같아서, 그 차이를 아는 것이 골격의 핵심이다.
@@ -53,4 +57,8 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 
 ## 상태
 
-골격을 채우는 중. 각 골격은 **슬롯 · 절차 · 익명화된 실패 시나리오** 3종을 모두 갖출 때 완성으로 본다.
+골격 7종 명세 완료(각각 **슬롯 · 절차 · 익명화된 실패 시나리오** 3종 보유).
+실행 골격 3종(1 위험 명령 가드 · 2 test-first · 4 드리프트 감시)은 코드로 구현돼 있고,
+가드는 실제 프로젝트의 실세션에서 발동까지 검증됐다.
+
+진행 상태의 SSOT 는 `docs/07-v0-done.md`(완료 기준 5개), 방향은 `docs/08-roadmap.md`.
