@@ -118,6 +118,45 @@ test('설정 자체가 없어도 상태 판정이 죽지 않는다', () => {
   assert.equal(statusOf(undefined).state, 'empty');
 });
 
+test('⭐ 프로브 — 표식이 든 명령은 deny 로 잡히고 probe:true 로 표시된다 (F13)', () => {
+  const c = { dangerGuard: { enabled: true, probe: { token: 'HARNESS-PROBE-7f3a' } } };
+  const hit = evaluate('echo HARNESS-PROBE-7f3a', c);
+  assert.equal(hit.decision, 'deny');
+  assert.equal(hit.probe, true);
+  assert.equal(hit.rule, 'probe');
+});
+
+test('⭐ 프로브만 있으면 empty 다 — 프로브가 규칙 수를 채워 활성으로 보이면 거짓 활성의 재발이다', () => {
+  const c = { dangerGuard: { enabled: true, probe: { token: 'HARNESS-PROBE-7f3a' } } };
+  const s = statusOf(c);
+  assert.equal(s.state, 'empty');
+  assert.equal(s.probe, true);
+});
+
+test('프로브는 실규칙에 앞선다 — 프로브 명령이 실규칙에도 걸리면 그 프로브는 기준 위반이다', () => {
+  const c = {
+    dangerGuard: {
+      enabled: true,
+      deny: [{ pattern: /PROBE/, why: '실규칙이 우연히 덮는다' }],
+      probe: { token: 'HARNESS-PROBE-7f3a' },
+    },
+  };
+  assert.equal(evaluate('echo HARNESS-PROBE-7f3a', c).probe, true);
+});
+
+test('실규칙 발동은 probe:false 이고 rule 은 id, 없으면 패턴 문자열이다', () => {
+  const withId = {
+    dangerGuard: { enabled: true, deny: [{ id: 'no-wipe', pattern: /\bwipe-all\b/, why: 'w' }] },
+  };
+  assert.equal(evaluate('wipe-all', withId).rule, 'no-wipe');
+  assert.equal(evaluate('wipe-all', withId).probe, false);
+  assert.equal(evaluate('wipe-all', cfg).rule, '\\bwipe-all\\b');
+});
+
+test('공유 자원 발동의 rule 은 shared 다', () => {
+  assert.equal(evaluate('cmd --target shared WRITE x', cfg).rule, 'shared');
+});
+
 test('훅 입력 JSON 에서 명령을 꺼낸다', () => {
   assert.equal(extractCommand('{"tool_input":{"command":"ls -al"}}'), 'ls -al');
 });

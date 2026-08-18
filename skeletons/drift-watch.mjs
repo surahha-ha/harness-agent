@@ -33,6 +33,7 @@
 import { statSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig, CONFIG_NAME, projectRoot } from './lib/config.mjs';
+import { logEvent } from './lib/log.mjs';
 
 /** 개행 정규화 — CRLF/CR 차이는 드리프트가 아니다. */
 export function normalizeEol(s) {
@@ -223,6 +224,15 @@ async function main() {
   process.stdout.write(
     `[drift-watch] 미러 ${s.mirrors} — 새 차이 ${fresh.length} · 승인된 차이 ${suppressed}(조용) · 상대 없음 ${absent}(no-op)\n`,
   );
+  // 계측 — 검사 결과를 시계열로 남긴다 (docs/13 §2 audit).
+  logEvent({
+    event: 'audit',
+    gate: 'drift-watch',
+    mirrors: s.mirrors,
+    fresh: fresh.length,
+    suppressed,
+    absent,
+  });
   process.exit(fresh.length > 0 ? 1 : 0);
 }
 

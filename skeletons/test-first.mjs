@@ -26,6 +26,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { loadConfig, compile, emitDecision, readStdin, CONFIG_NAME, projectRoot } from './lib/config.mjs';
+import { logEvent } from './lib/log.mjs';
 
 /** 경로 표기를 '/' 로 통일한다 — 경계표 패턴이 OS 마다 갈리면 규칙이 조용히 안 걸린다. */
 function norm(p) {
@@ -249,6 +250,16 @@ async function main() {
     const a = audit(files, loaded.config, realIo(root));
     const byDecision = { deny: 0, ask: 0 };
     for (const m of a.missing) byDecision[m.decision]++;
+    // 계측 — 선실측 수치를 시계열로 남긴다. 지표 1(완주율)의 원천이다 (docs/13 §4).
+    logEvent({
+      event: 'audit',
+      gate: 'test-first',
+      total: a.total,
+      inScope: a.inScope,
+      missing: a.missing.length,
+      deny: byDecision.deny,
+      ask: byDecision.ask,
+    });
     process.stdout.write(
       `[test-first] 선실측 — 전체 ${a.total} · 경계 안 ${a.inScope} · 테스트 없음 ${a.missing.length}` +
         ` (deny ${byDecision.deny} · ask ${byDecision.ask})\n`,

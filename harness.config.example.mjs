@@ -57,9 +57,10 @@ export default {
      * deny — 되돌릴 수 없는 파괴. **첫날부터 건다.**
      * 판별 질문: **"실행 후 5분 안에 원상복구할 수단이 있나?"** 없으면 deny 후보.
      * `recover` 는 막힌 사람이 할 일이다. 비우면 기본 문구가 나가지만, 적어 두는 편이 훨씬 낫다.
+     * `id` 는 계측 로그의 규칙 식별자다 — 비우면 패턴 문자열이 대신 쓰인다.
      */
     deny: [
-      // { pattern: /\bdocker\s+volume\s+(rm|prune)\b/,
+      // { id: 'no-volume-rm', pattern: /\bdocker\s+volume\s+(rm|prune)\b/,
       //   why: '볼륨 삭제는 데이터를 영구 소실시킵니다.',
       //   recover: '컨테이너만 내리려면 down(-v 없이). 정말 초기화가 필요하면 승인 주체에게 요청하세요.' },
     ],
@@ -88,6 +89,17 @@ export default {
       writePattern: null, // 예: /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE)\b/i
       why: '공유 환경에 쓰기를 실행합니다.',
       recover: '실행 전 승인을 받으세요. 조회·검증만이라면 그대로 진행해도 됩니다.',
+    },
+
+    /**
+     * ⭐ 검증 전용 프로브 — **아무것도 막지 않는 표식 하나** (필드 리포트 2 F13).
+     * 발동 검증(bootstrap §3)은 실규칙이 아니라 이 표식으로 잰다 — 실규칙에서 프로브를 고르면
+     * "무해함" 과 "대상 가드에만 걸림" 이 충돌한다(기존 가드가 있는 프로젝트일수록).
+     * 표식은 우연히 등장하지 않을 고유 문자열로 짓는다. `--status` 에 실규칙과 분리돼 표기되고,
+     * 프로브 발동은 계측 지표에서 제외된다.
+     */
+    probe: {
+      token: null, // 예: 'HARNESS-PROBE-7f3a'
     },
   },
 

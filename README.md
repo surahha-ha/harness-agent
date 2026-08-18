@@ -40,6 +40,10 @@ node .harness/danger-guard.mjs --status   # "활성 — deny N · ask M"
 # 나머지 실행 골격은 켜기 전에 잰다 (bootstrap §4 순서)
 node .harness/test-first.mjs --audit      # 경계 안인데 테스트 없는 파일 수를 먼저 센다
 node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — 미러 어긋남 검사
+
+# v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
+node .harness/metrics.mjs                 # 지표 5종 리포트 (미수집은 미수집으로 표기)
+node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록
 ```
 
 ⚠️ **"비활성" 을 한 번 보고 간다.** 미설치와 통과는 겉보기가 같아서, 그 차이를 아는 것이 골격의 핵심이다.
@@ -66,4 +70,7 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 
 아직 안 잰 것은 `docs/07-v0-done.md` §판정 에 적혀 있다 — 특히 **코드 계약 커플링**은 어느 골격도 아직 보지 않는다.
 
-진행 상태의 SSOT 는 `docs/07-v0-done.md`(완료 기준 5개), 방향은 `docs/08-roadmap.md`.
+**v1(계측) 진행 중** — 설계는 `docs/13-v1-eval-design.md`(딥리서치 3건 `docs/10~12` 가 입력).
+로그 층·프로브 슬롯·`metrics.mjs` 리포트는 구현·테스트 완료, 실제 프로젝트 실측(완료 기준 1·3)은 남았다.
+
+진행 상태의 SSOT 는 `docs/07-v0-done.md`(v0)·`docs/13-v1-eval-design.md` §7(v1), 방향은 `docs/08-roadmap.md`.
