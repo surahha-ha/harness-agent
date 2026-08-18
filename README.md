@@ -71,6 +71,7 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 아직 안 잰 것은 `docs/07-v0-done.md` §판정 에 적혀 있다 — 특히 **코드 계약 커플링**은 어느 골격도 아직 보지 않는다.
 
 **v1(계측) 진행 중** — 설계는 `docs/13-v1-eval-design.md`(딥리서치 3건 `docs/10~12` 가 입력).
-로그 층·프로브 슬롯·`metrics.mjs` 리포트는 구현·테스트 완료, 실제 프로젝트 실측(완료 기준 1·3)은 남았다.
+3회차 적용(`docs/14-field-report-03.md`)으로 완료 기준 2·3·4·5 그린 — 프로브 첫 실전 발동,
+부트스트랩 기준선 2점(7→12분), 계측 로그 첫 실데이터. 남은 것 = 기준 1 의 실규칙 발동(실사용 축적 대기).
 
 진행 상태의 SSOT 는 `docs/07-v0-done.md`(v0)·`docs/13-v1-eval-design.md` §7(v1), 방향은 `docs/08-roadmap.md`.
