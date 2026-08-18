@@ -92,6 +92,29 @@ test('완주율 — test-first audit 시계열의 처음과 끝', () => {
   assert.match(render(s), /29 → 0 \(닫힘\)/);
 });
 
+test('⭐ 경계표 없는 audit(inScope 0)은 완주율 시계열에서 빠진다 — "잰 것 없음" ≠ "다 닫힘"', () => {
+  const s = summarize([
+    { ts: t(1), event: 'audit', gate: 'test-first', total: 446, inScope: 0, missing: 0, deny: 0, ask: 0 },
+    { ts: t(2), event: 'audit', gate: 'test-first', total: 446, inScope: 0, missing: 0, deny: 0, ask: 0 },
+  ]);
+  assert.equal(s.completion.audits, 0);
+  assert.equal(s.completion.emptyAudits, 2);
+  const out = render(s);
+  assert.match(out, /1 완주율\s+미수집/);
+  assert.match(out, /경계표 없는 audit 2회 제외/);
+});
+
+test('경계표 있는 audit 과 없는 audit 이 섞이면 있는 것만 센다', () => {
+  const s = summarize([
+    { ts: t(1), event: 'audit', gate: 'test-first', total: 400, inScope: 0, missing: 0, deny: 0, ask: 0 },
+    { ts: t(2), event: 'audit', gate: 'test-first', total: 400, inScope: 30, missing: 5, deny: 2, ask: 3 },
+    { ts: t(3), event: 'audit', gate: 'test-first', total: 400, inScope: 30, missing: 0, deny: 0, ask: 0 },
+  ]);
+  assert.equal(s.completion.audits, 2);
+  assert.equal(s.completion.first.missing, 5);
+  assert.match(render(s), /5 → 0 \(닫힘\) \(경계표 없는 audit 1회 제외\)/);
+});
+
 test('⭐ 미수집은 "미수집" 으로 표기된다 — 0 으로 둔갑하지 않는다', () => {
   const out = render(summarize([pass(1)]));
   assert.match(out, /1 완주율\s+미수집/);

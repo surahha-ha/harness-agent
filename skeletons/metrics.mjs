@@ -42,7 +42,14 @@ export function summarize(events) {
   const passes = sorted.filter((e) => e.event === 'pass');
   const afters = sorted.filter((e) => e.event === 'after' && !e.probe);
   const notes = sorted.filter((e) => e.event === 'note');
-  const tfAudits = sorted.filter((e) => e.event === 'audit' && e.gate === 'test-first');
+  // ⭐ 경계표가 비어 있던 audit(inScope 0)은 완주율 시계열에서 뺀다 — "잰 것이 없어 미달 0"
+  //    을 "다 닫혀서 미달 0" 으로 읽으면 완주율이 거짓 그린이 된다 (3회차 실적용에서 실측된 결함).
+  const tfAudits = sorted.filter(
+    (e) => e.event === 'audit' && e.gate === 'test-first' && e.inScope > 0,
+  );
+  const emptyAudits = sorted.filter(
+    (e) => e.event === 'audit' && e.gate === 'test-first' && !(e.inScope > 0),
+  ).length;
   const driftAudits = sorted.filter((e) => e.event === 'audit' && e.gate === 'drift-watch');
 
   // 지표 2 — ask 발동마다, 그 뒤 같은 접두사의 after 하나를 짝짓는다(한 번 쓴 after 는 재사용 금지).
@@ -76,6 +83,7 @@ export function summarize(events) {
   return {
     completion: {
       audits: tfAudits.length,
+      emptyAudits,
       first: tfAudits[0] ?? null,
       last: tfAudits[tfAudits.length - 1] ?? null,
     },
@@ -102,12 +110,17 @@ export function render(s) {
   const lines = [];
   const missing = (why) => `미수집 — ${why}`;
 
+  const emptyNote =
+    s.completion.emptyAudits > 0 ? ` (경계표 없는 audit ${s.completion.emptyAudits}회 제외)` : '';
   lines.push(
     `1 완주율        ` +
       (s.completion.audits >= 2
         ? `test-first audit ${s.completion.audits}회 — 테스트 없음 ${s.completion.first.missing} → ${s.completion.last.missing}` +
-          (s.completion.last.missing === 0 ? ' (닫힘)' : '')
-        : missing(`test-first audit 이벤트가 ${s.completion.audits}개 — 시계열엔 2개 이상이 필요합니다`)),
+          (s.completion.last.missing === 0 ? ' (닫힘)' : '') +
+          emptyNote
+        : missing(
+            `test-first audit 이벤트가 ${s.completion.audits}개 — 시계열엔 2개 이상이 필요합니다${emptyNote}`,
+          )),
   );
   lines.push(
     `2 개입 분해      ` +
