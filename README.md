@@ -44,6 +44,11 @@ node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — �
 # v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
 node .harness/metrics.mjs                 # 지표 5종 리포트 (미수집은 미수집으로 표기)
 node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록
+
+# v2 위임 승격 — 습관적 승인만 남은 ask 를 데이터로 allow 로 (docs/15 · promotion 슬롯 채운 뒤)
+node .harness/metrics.mjs --promotions    # 4축 후보 판정 + 승격 레코드 상태
+node .harness/metrics.mjs --promote <규칙id> --approved-by <이름>   # 후보만 적용 가능
+node .harness/metrics.mjs --demote <규칙id> --text "사유"           # 수동 강등 (즉시 ask 복귀)
 ```
 
 ⚠️ **"비활성" 을 한 번 보고 간다.** 미설치와 통과는 겉보기가 같아서, 그 차이를 아는 것이 골격의 핵심이다.
@@ -76,9 +81,10 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 프로브 제외)이 닫혔다. 단 지표 5종 중 완주율·개입 분해는 아직 "미수집" — 완주는 로그 층이
 실제로 돈다는 판정이지 지표가 전부 채워졌다는 뜻이 아니다.
 
-**v2(위임 확대) 진입 — 승격 기준 설계 완료** — `docs/15-v2-promotion-design.md`(규범 문서).
+**v2(위임 확대) 진입 — 승격 기준 설계·기제 구현 완료** — `docs/15-v2-promotion-design.md`(규범 문서).
 위임 승격(ask→allow)은 판정 자동·적용은 사람 1회·강등만 전자동의 비대칭 구조로, 4축 판정식
 (연속 무거부·실패 한도 0·습관적 승인 배제·분산)의 구조만 고정하고 임계값은 프로젝트 슬롯이다.
-다음 = 승격 후보 리포트·승격 레코드 구현(완료 기준 5개는 그 문서 §8).
+기제(후보 리포트·승격 레코드·강등 자동 실효)는 구현·실증됐다(§8 기준 1·2·3·5 그린) —
+남은 것 = 기준 4, 실제 프로젝트의 절차 1건 완주(ask 실데이터 축적 대기).
 
 진행 상태의 SSOT 는 `docs/07-v0-done.md`(v0)·`docs/13-v1-eval-design.md` §7(v1), 방향은 `docs/08-roadmap.md`.

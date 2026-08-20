@@ -23,8 +23,9 @@
 ```
 ⓪ 겹침 확인    이미 깔린 게이트가 있는지 먼저 훑는다 (훅 설정·git 훅·셸 래퍼)
 ① 복사        skeletons/ → .harness/ · harness.config.example.mjs → harness.config.mjs
-              + .gitignore 에 `.harness/log.jsonl` 추가 — 계측 로그에는 규칙 사유·명령 접두사가
-                남는다. 골격 사본은 커밋하되 **로그는 커밋하지 않는다** (docs/13 §3)
+              + .gitignore 에 `.harness/log.jsonl` · `.harness/promotions.jsonl` 추가 —
+                계측 로그·승격 레코드에는 규칙 사유·명령 접두사가 남는다.
+                골격 사본은 커밋하되 **로그·레코드는 커밋하지 않는다** (docs/13 §3 · docs/15 §5)
 ② 상태 확인    node .harness/danger-guard.mjs --status
               → "설정됨 · 규칙 없음 — 아무것도 막지 않습니다"  ← 여기서 이게 나와야 정상
 ③ 채우기      아래 §2 의 5개 질문에만 답한다 (나머지는 비워 둔다)

@@ -19,12 +19,15 @@
  *   node skeletons/danger-guard.mjs --status         # 활성 확인 (설정·규칙 수)
  *
  * 계측: 훅 경로의 판정은 `.harness/log.jsonl` 에 fire/pass 로 남는다 (docs/13 §2·§3).
+ * 승격: `.harness/promotions.jsonl` 의 유효 레코드가 있는 ask 규칙은 allow 로 통과하되
+ *       pass(rule·promoted) 로 계속 기록된다. 강등 조건 충족 시 자동으로 ask 복귀 (docs/15 §5·§6).
  *
  * 종료코드: 0 판정 완료(통과 포함) · 2 가드 오류
  */
 
 import { loadConfig, compile, emitDecision, readStdin, CONFIG_NAME } from './lib/config.mjs';
-import { logEvent, normalizeCmdPrefix } from './lib/log.mjs';
+import { logEvent, normalizeCmdPrefix, readLog } from './lib/log.mjs';
+import { readPromotions, promotionStateFor, currentPatternOf } from './lib/promotions.mjs';
 
 /** 기본 복구 문구 — 규칙에 `recover` 가 없을 때. 없는 것보다는 낫지만 규칙마다 적는 편이 훨씬 낫다. */
 const DEFAULT_RECOVER = {
@@ -151,9 +154,24 @@ async function main() {
       process.exit(2);
     }
     const s = statusOf(loaded.config);
+    // 위임 승격(v2)은 활성 확인에 보인다 — allow 로 도는 규칙이 몇인지 모르면 활성 확인이 아니다.
+    const { records } = readPromotions();
+    let promotedActive = 0;
+    if (records.length > 0) {
+      const { events } = readLog();
+      const ruleIds = new Set(records.map((r) => r && r.rule).filter(Boolean));
+      for (const id of ruleIds) {
+        if (
+          promotionStateFor(id, records, events, currentPatternOf(loaded.config.dangerGuard, id))
+            .active
+        )
+          promotedActive++;
+      }
+    }
     const detail =
       `deny ${s.deny} · ask ${s.ask} · 공유자원 규칙 ${s.shared ? '설정됨' : '없음'}` +
-      ` · 프로브 ${s.probe ? '설정됨' : '없음'}`;
+      ` · 프로브 ${s.probe ? '설정됨' : '없음'}` +
+      (records.length > 0 ? ` · 승격 allow ${promotedActive}/${records.length}레코드` : '');
     const line = {
       off: `[danger-guard] 꺼짐 — enabled:false 입니다 (${detail})\n`,
       empty:
@@ -197,23 +215,58 @@ async function main() {
   const command = cmdFlag >= 0 ? (argv[cmdFlag + 1] ?? '') : extractCommand(readStdin());
   const hit = evaluate(command, loaded.config);
 
+  // v2 위임 승격 — ask 판정에 유효한 승격 레코드가 있으면 allow 로 처리한다 (docs/15 §5).
+  // 강등 조건 충족은 여기서 감지돼 레코드가 무시된다(ask 복귀) — 설정 편집 없는 자동·즉시 강등.
+  // 레코드·로그를 못 읽으면 승격 없음 = ask 유지 (보수 방향 — docs/15 §7).
+  let promoted = false;
+  if (hit && hit.decision === 'ask' && !hit.probe) {
+    const { records } = readPromotions();
+    if (records.length > 0) {
+      const { events } = readLog();
+      promoted = promotionStateFor(
+        hit.rule,
+        records,
+        events,
+        currentPatternOf(loaded.config.dangerGuard, hit.rule),
+      ).active;
+    }
+  }
+
   // 계측은 훅 경로만 남긴다 — --cmd 는 점검용 단건 판정이라 지표(분모)를 오염시킨다.
+  // ⭐ 승격된 매치도 기록을 끊지 않는다 — pass 에 rule·promoted 를 실어 분모와 강등 감시를 지킨다.
   if (fromHook && command.trim()) {
     logEvent(
       hit
-        ? {
-            event: 'fire',
-            gate: 'danger-guard',
-            rule: hit.rule,
-            decision: hit.decision,
-            probe: hit.probe,
-            cmdPrefix: normalizeCmdPrefix(command),
-          }
+        ? promoted
+          ? {
+              event: 'pass',
+              gate: 'danger-guard',
+              rule: hit.rule,
+              promoted: true,
+              cmdPrefix: normalizeCmdPrefix(command),
+            }
+          : {
+              event: 'fire',
+              gate: 'danger-guard',
+              rule: hit.rule,
+              decision: hit.decision,
+              probe: hit.probe,
+              cmdPrefix: normalizeCmdPrefix(command),
+            }
         : { event: 'pass', gate: 'danger-guard', cmdPrefix: normalizeCmdPrefix(command) },
     );
   }
 
   if (!hit) process.exit(0);
+
+  if (promoted) {
+    // 점검 경로(--cmd)에서는 이유를 보이게 한다 — 왜 안 막혔는지 모르면 점검이 아니다.
+    if (!fromHook)
+      process.stderr.write(
+        `[danger-guard] 위임 승격 allow — 규칙 ${hit.rule} 에 유효한 승격 레코드가 있습니다 (docs/15 §5)\n`,
+      );
+    process.exit(0);
+  }
 
   emitDecision(hit.decision, reasonFor(hit));
   process.exit(0);

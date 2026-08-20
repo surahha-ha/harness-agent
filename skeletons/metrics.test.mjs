@@ -146,5 +146,13 @@ test('drift-watch audit 은 부가 정보로 보인다', () => {
 });
 
 test('알려진 라벨 어휘가 문서와 어긋나지 않는다', () => {
-  assert.deepEqual(KNOWN_LABELS, ['false-positive', 'false-green', 'bootstrap-minutes']);
+  // v1 3종(docs/13 §2) + v2 확장 3종(docs/15 §6 — 사고·승격·강등). 확장은 additive 다.
+  assert.deepEqual(KNOWN_LABELS, [
+    'false-positive',
+    'false-green',
+    'bootstrap-minutes',
+    'incident',
+    'promoted',
+    'demoted',
+  ]);
 });
