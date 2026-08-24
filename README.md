@@ -44,6 +44,7 @@ node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — �
 # v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
 node .harness/metrics.mjs                 # 지표 5종 리포트 (미수집은 미수집으로 표기)
 node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록
+node .harness/metrics.mjs --note fp-reviewed --rule <규칙id>   # 발동 전수 판정 뒤 경계표 (라벨 0 ≠ 오탐 없음)
 
 # v2 위임 승격 — 습관적 승인만 남은 ask 를 데이터로 allow 로 (docs/15 · promotion 슬롯 채운 뒤)
 node .harness/metrics.mjs --promotions    # 4축 후보 판정 + 승격 레코드 상태

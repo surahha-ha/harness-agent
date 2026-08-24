@@ -146,7 +146,8 @@ test('drift-watch audit 은 부가 정보로 보인다', () => {
 });
 
 test('알려진 라벨 어휘가 문서와 어긋나지 않는다', () => {
-  // v1 3종(docs/13 §2) + v2 확장 3종(docs/15 §6 — 사고·승격·강등). 확장은 additive 다.
+  // v1 3종(docs/13 §2) + v2 확장 3종(docs/15 §6 — 사고·승격·강등) + 판정 마커 1종(docs/13 §6 절차 1,
+  // v1 판정 절에서 임시 사용 후 등재). 확장은 전부 additive 다.
   assert.deepEqual(KNOWN_LABELS, [
     'false-positive',
     'false-green',
@@ -154,5 +155,54 @@ test('알려진 라벨 어휘가 문서와 어긋나지 않는다', () => {
     'incident',
     'promoted',
     'demoted',
+    'fp-reviewed',
   ]);
+});
+
+// ── 오탐 판정 경계(fp-reviewed) — "라벨 0" 은 "오탐 없음" 이 아니다 ──────────────────
+
+const review = (m, rule) => ({ ts: t(m), event: 'note', label: 'fp-reviewed', rule });
+
+test('⭐ 판정 마커가 없으면 발동은 전부 미판정 — 오탐 라벨 0 이 오탐 없음으로 둔갑하지 않는다', () => {
+  const s = summarize([fire(1, 'deny', 'x'), fire(2, 'deny', 'x'), pass(3)]);
+  assert.equal(s.gate.falsePositives, 0);
+  assert.equal(s.gate.reviewed, 0);
+  assert.equal(s.gate.unreviewed, 2);
+  assert.match(render(s), /오탐 판정 0\/2 \(미판정 2 — 라벨 0 ≠ 오탐 없음/);
+});
+
+test('fp-reviewed 의 ts 가 경계다 — 이전 발동은 판정 완료, 이후 발동은 미판정', () => {
+  const s = summarize([fire(1, 'deny', 'x'), fire(2, 'deny', 'x'), review(3), fire(4, 'deny', 'x')]);
+  assert.equal(s.gate.reviewed, 2);
+  assert.equal(s.gate.unreviewed, 1);
+  assert.match(render(s), /오탐 판정 2\/3 \(미판정 1/);
+});
+
+test('전부 판정되면 "완료" 로 표기된다 — 오탐률 표기는 그대로 남는다', () => {
+  const s = summarize([
+    fire(1, 'deny', 'x'),
+    { ts: t(2), event: 'note', label: 'false-positive', rule: 'r' },
+    review(3),
+  ]);
+  assert.equal(s.gate.falsePositives, 1);
+  assert.match(render(s), /오탐률 1\/1 · 오탐 판정 1\/1 완료/);
+});
+
+test('rule 이 있는 fp-reviewed 는 그 규칙의 발동만 덮는다', () => {
+  const other = { ...fire(1, 'deny', 'y'), rule: 'other' };
+  const s = summarize([other, fire(2, 'deny', 'x'), review(3, 'r')]);
+  assert.equal(s.gate.reviewed, 1);
+  assert.equal(s.gate.unreviewed, 1);
+});
+
+test('프로브 발동은 판정 대상에도 들지 않는다', () => {
+  const s = summarize([fire(1, 'deny', 'x', true), fire(2, 'deny', 'x'), review(3)]);
+  assert.equal(s.gate.reviewed, 1);
+  assert.equal(s.gate.unreviewed, 0);
+});
+
+test('발동 0 이면 판정 표기 자체가 없다 — 없는 것을 완료로 적지 않는다', () => {
+  const s = summarize([pass(1), review(2)]);
+  assert.equal(s.gate.reviewed, 0);
+  assert.doesNotMatch(render(s), /오탐 판정/);
 });

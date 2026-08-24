@@ -15,7 +15,10 @@
  *   node skeletons/metrics.mjs --note <label> [--value N] [--text "..."] [--rule <id>]  # 사람 라벨 기록
  *     label: false-positive(오탐 확정) · false-green(거짓 그린 감사) · bootstrap-minutes(부트스트랩 소요)
  *            incident(사고) · promoted/demoted(승격·강등 사실 — 보통 아래 명령이 대신 남긴다)
+ *            fp-reviewed(오탐 판정 마커 — 이 시각까지의 발동을 사람이 전수 판정했다는 경계표.
+ *                        오탐 확정이 아니다 — 확정은 false-positive 로 따로 남긴다)
  *     ⚠️ 오탐·사고 note 에 --rule 을 붙이면 그 규칙의 승격을 즉시 실효시킨다 (docs/15 §6 ⓐ).
+ *        fp-reviewed 의 --rule 은 판정 범위를 그 규칙으로 좁힐 뿐, 승격을 건드리지 않는다.
  *   node skeletons/metrics.mjs --promotions                     # v2 승격 후보 리포트 + 레코드 상태
  *   node skeletons/metrics.mjs --promote <규칙id> --approved-by <이름>   # 후보 승격 적용(레코드 작성)
  *   node skeletons/metrics.mjs --demote <규칙id> --text "사유"           # 수동 강등 (docs/15 §6 ⓑ)
@@ -43,6 +46,7 @@ export const KNOWN_LABELS = [
   'incident',
   'promoted',
   'demoted',
+  'fp-reviewed',
 ];
 
 function median(nums) {
@@ -97,6 +101,15 @@ export function summarize(events) {
   }
 
   const falsePositives = notes.filter((n) => n.label === 'false-positive').length;
+  // ⭐ 오탐 판정 경계 — "라벨 0건" 과 "판정했더니 오탐 없음" 을 가른다 (docs/13 §6 절차 1).
+  //    fp-reviewed note 의 ts 가 경계표다: 그 시각 이전의 발동은 판정 완료, 이후는 미판정.
+  //    rule 이 있으면 그 규칙의 발동만 덮는다. 오탐률(false-positive/fire) 계산은 건드리지 않는다.
+  const reviews = notes.filter((n) => n.label === 'fp-reviewed');
+  const reviewedFires = fires.filter((f) =>
+    reviews.some(
+      (r) => String(f.ts).localeCompare(String(r.ts)) <= 0 && (!r.rule || r.rule === f.rule),
+    ),
+  ).length;
   const bootstrapMinutes = notes
     .filter((n) => n.label === 'bootstrap-minutes' && Number.isFinite(n.value))
     .map((n) => n.value);
@@ -115,6 +128,8 @@ export function summarize(events) {
       denies: fires.filter((e) => e.decision === 'deny').length,
       asks: asks.length,
       falsePositives,
+      reviewed: reviewedFires,
+      unreviewed: fires.length - reviewedFires,
       denominator: passes.length + fires.length,
     },
     cost: { bootstrapMinutes, pass: passes.length, fire: fires.length },
@@ -162,6 +177,12 @@ export function render(s) {
       (s.gate.denominator > 0
         ? `발동 ${s.gate.fires} (deny ${s.gate.denies} · ask ${s.gate.asks}) · 오탐 라벨 ${s.gate.falsePositives}` +
           (s.gate.fires > 0 ? ` → 오탐률 ${s.gate.falsePositives}/${s.gate.fires}` : '') +
+          // ⭐ 라벨 0 을 오탐 없음으로 읽지 않는다 — 판정 경계(fp-reviewed)가 없는 발동은 미판정이다.
+          (s.gate.fires > 0
+            ? s.gate.unreviewed > 0
+              ? ` · 오탐 판정 ${s.gate.reviewed}/${s.gate.fires} (미판정 ${s.gate.unreviewed} — 라벨 0 ≠ 오탐 없음, --note fp-reviewed 로 경계를 남기세요)`
+              : ` · 오탐 판정 ${s.gate.reviewed}/${s.gate.fires} 완료`
+            : '') +
           ` · 분모(검사 총량) ${s.gate.denominator}`
         : missing('게이트를 지난 명령이 아직 없습니다 — 훅 연결을 확인하세요(설정≠연결)')),
   );

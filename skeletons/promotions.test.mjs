@@ -17,6 +17,7 @@ import {
   currentPatternOf,
   candidateFor,
   slotsReady,
+  DEMOTION_NOTE_LABELS,
 } from './lib/promotions.mjs';
 import { promotionReport } from './metrics.mjs';
 
@@ -84,6 +85,12 @@ test('rule 이 다르거나 없는 note 는 이 규칙을 강등하지 않는다
   const other = { ts: ts(11, 0), event: 'note', label: 'incident', rule: 'r2' };
   const noRule = { ts: ts(11, 0), event: 'note', label: 'incident' };
   assert.equal(promotionStateFor('r1', [RECORD], [other, noRule], RECORD.pattern).active, true);
+});
+
+test('fp-reviewed(판정 마커) note 는 rule 을 가리켜도 강등 사유가 아니다 — 판정 사실 ≠ 오탐 확정', () => {
+  const marker = { ts: ts(11, 0), event: 'note', label: 'fp-reviewed', rule: 'r1' };
+  assert.equal(DEMOTION_NOTE_LABELS.includes('fp-reviewed'), false);
+  assert.equal(promotionStateFor('r1', [RECORD], [marker], RECORD.pattern).active, true);
 });
 
 test('⭐ 강등 ⓑ — 수동 demoted note 로 즉시 실효', () => {
