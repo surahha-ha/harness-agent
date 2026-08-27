@@ -83,6 +83,7 @@
 | 실행 지점 | 거는 법 |
 | - | - |
 | 에이전트 도구의 실행 전 훅 | 명령 실행 도구에 `node .harness/danger-guard.mjs` 를 연결. stdin 으로 도구 입력 JSON 을 받는다 |
+| 에이전트 도구의 실행 후 훅 | 같은 도구에 `node .harness/danger-guard.mjs --post` 를 연결 — ask 발동 뒤 실제 실행을 `after` 로 남긴다(v1 지표 2·v2 승격 판정의 입력). 실행 전 훅만 걸면 가드는 돌지만 ask→after 상관은 영원히 "미수집" 이다 — 1회차 설치처가 이 상태로 남아 있던 것을 4회차 점검에서 발견 |
 | git 훅 | `.githooks/pre-commit` 등에서 호출하고 `git config core.hooksPath .githooks` |
 | 셸 래퍼 | 자주 쓰는 위험 명령을 함수로 감싸 가드를 먼저 태운다 |
 
