@@ -51,6 +51,17 @@ test('fire 보다 앞선 after 는 짝이 아니다', () => {
   assert.equal(s.intervention.approved, 0);
 });
 
+test('⭐ F26 — 접힌 접두사끼리는 짝이 아니다 (서로 다른 명령이 뭉친 자리라 승인으로 셀 수 없다)', () => {
+  const s = summarize([fire(1, 'ask', '(unparsed)'), after(2, '(unparsed)')]);
+  assert.equal(s.intervention.approved, 0, '문자열이 같아도 열쇠가 아니다');
+  assert.equal(s.intervention.asks, 1, '분모(ask 발동)는 그대로 센다');
+});
+
+test('⭐ 빈 접두사도 짝이 아니다 — 빈 값끼리 맞아떨어져 승인이 되면 안 된다', () => {
+  const s = summarize([fire(1, 'ask', ''), after(2, '')]);
+  assert.equal(s.intervention.approved, 0);
+});
+
 test('⭐ 프로브 발동은 모든 지표에서 제외되고, 제외 수는 보인다', () => {
   const s = summarize([fire(1, 'deny', 'echo probe', true), pass(2)]);
   assert.equal(s.gate.fires, 0);
@@ -156,6 +167,8 @@ test('알려진 라벨 어휘가 문서와 어긋나지 않는다', () => {
     'promoted',
     'demoted',
     'fp-reviewed',
+    'recurrence',
+    'caught-defect',
   ]);
 });
 
@@ -205,4 +218,48 @@ test('발동 0 이면 판정 표기 자체가 없다 — 없는 것을 완료로
   const s = summarize([pass(1), review(2)]);
   assert.equal(s.gate.reviewed, 0);
   assert.doesNotMatch(render(s), /오탐 판정/);
+});
+
+// ── 판정 층 보조 표기 (recurrence · caught-defect) — F24·F25 ────────────────────────
+
+const label = (m, name, rule) => ({ ts: t(m), event: 'note', label: name, rule });
+
+test('⭐ 판정 층 라벨이 하나도 없으면 보조 줄을 내지 않는다 — 0 은 "안 셌다" 이지 "없다" 가 아니다', () => {
+  const s = summarize([fire(1, 'deny', 'x'), review(2)]);
+  assert.equal(s.gate.recurrences, 0);
+  assert.equal(s.gate.caughtDefects, 0);
+  assert.doesNotMatch(render(s), /판정 층/);
+});
+
+test('재발·결함 적발은 건수로 세어 보조 줄에 나온다', () => {
+  const s = summarize([
+    fire(1, 'deny', 'x'),
+    fire(2, 'deny', 'x'),
+    label(3, 'recurrence', 'r'),
+    label(4, 'caught-defect', 'r'),
+    review(5),
+  ]);
+  assert.equal(s.gate.recurrences, 1);
+  assert.equal(s.gate.caughtDefects, 1);
+  assert.match(render(s), /판정 층 — 같은 원인 재발 1건 · 차단이 결함을 드러냄 1건/);
+});
+
+test('⭐ 보조 표기는 비율이 되지 않는다 — 분모가 판정 범위에 따라 흔들리기 때문', () => {
+  const s = summarize([fire(1, 'deny', 'x'), label(2, 'recurrence', 'r'), review(3)]);
+  const out = render(s);
+  assert.match(out, /비율 아님/);
+  assert.doesNotMatch(out, /재발 1\/\d/, '재발을 분수로 찍지 않는다');
+});
+
+test('⭐ 두 라벨은 오탐률 정의를 건드리지 않는다 — additive', () => {
+  const base = summarize([fire(1, 'deny', 'x'), review(2)]);
+  const withLabels = summarize([
+    fire(1, 'deny', 'x'),
+    label(2, 'recurrence', 'r'),
+    label(3, 'caught-defect', 'r'),
+    review(4),
+  ]);
+  assert.equal(withLabels.gate.falsePositives, base.gate.falsePositives);
+  assert.equal(withLabels.gate.fires, base.gate.fires);
+  assert.equal(withLabels.gate.reviewed, base.gate.reviewed);
 });

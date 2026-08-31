@@ -22,12 +22,24 @@ export function logPath(root = projectRoot()) {
   return path.join(root, LOG_DIR, LOG_NAME);
 }
 
+/** 판별이 서지 않는 첫 토큰을 접는 자리 표시자 — 짝짓기에서 제외된다(아래 `isPairablePrefix`). */
+export const UNPARSED_PREFIX = '(unparsed)';
+
+/** 명령 이름으로 인정하는 첫 토큰: 실행파일 이름, 또는 한 마디짜리 상대경로 실행. */
+const HEAD_COMMAND = /^[A-Za-z_][\w.-]*$/;
+const HEAD_RELATIVE = /^\.{1,2}\/[\w.-]+$/;
+
 /**
  * 명령 접두사 정규화 — **첫 토큰 + 첫 서브커맨드.** 순수 함수.
  *
- * 두 번째 토큰은 서브커맨드처럼 생겼을 때만 취한다(영문 시작, 영숫자·점·하이픈·언더스코어).
- * 경로·플래그·리다이렉션·인용부호가 접두사에 섞이면 "원문을 저장하지 않는다" 가 무너진다 —
- * 판별이 서지 않는 토큰은 버리는 쪽이 안전하다.
+ * 두 토큰 모두 판별한다. 두 번째 토큰은 서브커맨드처럼 생겼을 때만 취하고,
+ * **첫 토큰도 명령 이름처럼 생겼을 때만 취한다** — 경로·변수 대입·인용부호가 접두사에 섞이면
+ * "원문을 저장하지 않는다"(docs/13 §3)가 무너진다. 판별이 서지 않으면 버리는 쪽이 안전하다.
+ *
+ * ⚠️ **첫 토큰 판별이 없던 시절의 로그에는 절대경로가 실려 있다**(F26, 2026-08-31 실측).
+ * `VAR="/절대/경로/..."; cmd` 처럼 공백 없는 변수 대입은 통째로 한 토큰이라 그대로 저장됐다.
+ * 판별 불가는 원문을 자르지 않고 `UNPARSED_PREFIX` 로 **접는다** — 잘라 남기면 남은 조각이
+ * 여전히 원문의 일부이기 때문이다.
  */
 export function normalizeCmdPrefix(command) {
   const tokens = String(command || '')
@@ -36,9 +48,21 @@ export function normalizeCmdPrefix(command) {
     .filter(Boolean);
   if (tokens.length === 0) return '';
   const head = tokens[0];
+  if (!HEAD_COMMAND.test(head) && !HEAD_RELATIVE.test(head)) return UNPARSED_PREFIX;
   const sub = tokens[1];
   if (sub && /^[A-Za-z][\w.-]*$/.test(sub)) return `${head} ${sub}`;
   return head;
+}
+
+/**
+ * 이 접두사를 ask→after 짝짓기의 열쇠로 써도 되는가.
+ *
+ * `(unparsed)` 는 서로 다른 명령이 뭉쳐 있는 자리라 열쇠가 될 수 없다 — 뭉친 것을 같다고 보면
+ * 남의 `after` 를 승인으로 셀 수 있다. 짝을 못 찾으면 "승인 아님" 으로 남고, 그것은
+ * **승격을 늦추는 방향**이다(docs/15 ⑥ — 근사는 느슨해지는 쪽으로 오차 내지 않는다).
+ */
+export function isPairablePrefix(prefix) {
+  return Boolean(prefix) && prefix !== UNPARSED_PREFIX;
 }
 
 /**

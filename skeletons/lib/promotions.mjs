@@ -15,7 +15,7 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { projectRoot } from './config.mjs';
-import { LOG_DIR } from './log.mjs';
+import { LOG_DIR, isPairablePrefix } from './log.mjs';
 
 export const PROMOTIONS_NAME = 'promotions.jsonl';
 
@@ -183,9 +183,12 @@ export function candidateFor(ruleId, events, slots) {
   // 승인 근사 짝짓기 — metrics.summarize 와 같은 규칙 (같은 접두사·이후·1회용).
   const consumed = new Set();
   const paired = fires.map((f) => {
-    const hit = afters.findIndex(
-      (a, i) => !consumed.has(i) && a.cmdPrefix === f.cmdPrefix && String(a.ts) >= String(f.ts),
-    );
+    // 열쇠가 될 수 없는 접두사는 짝을 찾지 않는다 — 스트릭이 짧아지는 방향(승격 지연)이다.
+    const hit = isPairablePrefix(f.cmdPrefix)
+      ? afters.findIndex(
+          (a, i) => !consumed.has(i) && a.cmdPrefix === f.cmdPrefix && String(a.ts) >= String(f.ts),
+        )
+      : -1;
     if (hit < 0) return { fire: f, approved: false, latencyMs: null };
     consumed.add(hit);
     return { fire: f, approved: true, latencyMs: Date.parse(afters[hit].ts) - Date.parse(f.ts) };

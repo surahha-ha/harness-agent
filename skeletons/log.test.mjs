@@ -13,7 +13,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { normalizeCmdPrefix, logEvent, readLog, logPath } from './lib/log.mjs';
+import {
+  normalizeCmdPrefix,
+  logEvent,
+  readLog,
+  logPath,
+  isPairablePrefix,
+  UNPARSED_PREFIX,
+} from './lib/log.mjs';
 
 test('접두사 = 첫 토큰 + 첫 서브커맨드', () => {
   assert.equal(normalizeCmdPrefix('git push origin main'), 'git push');
@@ -31,6 +38,42 @@ test('빈 명령은 빈 접두사 — 던지지 않는다', () => {
   assert.equal(normalizeCmdPrefix(''), '');
   assert.equal(normalizeCmdPrefix('   '), '');
   assert.equal(normalizeCmdPrefix(null), '');
+});
+
+test('⭐ F26 — 첫 토큰이 명령 이름이 아니면 통째로 접는다 (변수 대입에 실린 절대경로 유입 차단)', () => {
+  // 공백이 없어 한 토큰인 변수 대입 — 판별이 없던 시절 이 원문이 그대로 로그에 실렸다.
+  assert.equal(normalizeCmdPrefix('TMP="/home/someone/work/secret"; mkdir -p "$TMP"'), UNPARSED_PREFIX);
+  assert.equal(normalizeCmdPrefix('K=\'A1b2C3d4\'; use "$K"'), UNPARSED_PREFIX);
+  assert.equal(normalizeCmdPrefix('$sp="C:/Users/someone/tmp"; ls'), UNPARSED_PREFIX);
+  assert.equal(normalizeCmdPrefix('/absolute/path/to/tool run'), UNPARSED_PREFIX);
+});
+
+test('⭐ F26 — 접는 값은 잘라 남기지 않는다 (남은 조각도 원문이다)', () => {
+  const out = normalizeCmdPrefix('LOG="/home/someone/build.log"; tail "$LOG"');
+  assert.equal(out, UNPARSED_PREFIX);
+  assert.ok(!out.includes('someone'), '경로의 어떤 조각도 남지 않는다');
+  assert.ok(!out.includes('/'), '구분자조차 남지 않는다');
+});
+
+test('정상 명령과 한 마디 상대경로 실행은 그대로 유지된다 — 접기가 과잉이면 지표가 죽는다', () => {
+  assert.equal(normalizeCmdPrefix('git push origin main'), 'git push');
+  assert.equal(normalizeCmdPrefix('./gradlew test'), './gradlew test');
+  assert.equal(normalizeCmdPrefix('_myfunc arg'), '_myfunc arg');
+  assert.equal(normalizeCmdPrefix('node script.mjs'), 'node script.mjs');
+});
+
+test('여러 마디 상대경로는 접는다 — 저장소 내부 구조도 접두사에 남길 것이 아니다', () => {
+  // `./gradlew` 같은 한 마디 실행은 승격 단위로 쓸 값이 있지만, 마디가 늘어나면 그때부터는
+  // 명령 이름이 아니라 경로다. 경계를 "한 마디" 에 둬야 판별이 서고, 애매한 쪽은 접는다.
+  assert.equal(normalizeCmdPrefix('../tools/run.sh'), UNPARSED_PREFIX);
+  assert.equal(normalizeCmdPrefix('./scripts/deploy/run.sh --now'), UNPARSED_PREFIX);
+});
+
+test('⭐ 접힌 접두사는 짝짓기 열쇠가 될 수 없다 — 뭉친 것을 같다고 보면 남의 승인을 센다', () => {
+  assert.equal(isPairablePrefix('git push'), true);
+  assert.equal(isPairablePrefix(UNPARSED_PREFIX), false);
+  assert.equal(isPairablePrefix(''), false);
+  assert.equal(isPairablePrefix(undefined), false);
 });
 
 test('기록 → 읽기 왕복. ts 는 기록 시점에 찍힌다', () => {

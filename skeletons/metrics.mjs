@@ -17,6 +17,9 @@
  *            incident(사고) · promoted/demoted(승격·강등 사실 — 보통 아래 명령이 대신 남긴다)
  *            fp-reviewed(오탐 판정 마커 — 이 시각까지의 발동을 사람이 전수 판정했다는 경계표.
  *                        오탐 확정이 아니다 — 확정은 false-positive 로 따로 남긴다)
+ *            recurrence(그 발동이 이미 판정한 것과 같은 원인의 반복이다 — 안내가 습관을 못 바꾼 신호)
+ *            caught-defect(그 차단이 실제 결함을 드러냈다 — 규칙이 만들어 낸 재검토의 값)
+ *            ↑ 둘은 판정(§6 절차 1) 중에만 붙인다. 건수로만 보고되고 비율이 되지 않는다.
  *     ⚠️ 오탐·사고 note 에 --rule 을 붙이면 그 규칙의 승격을 즉시 실효시킨다 (docs/15 §6 ⓐ).
  *        fp-reviewed 의 --rule 은 판정 범위를 그 규칙으로 좁힐 뿐, 승격을 건드리지 않는다.
  *   node skeletons/metrics.mjs --promotions                     # v2 승격 후보 리포트 + 레코드 상태
@@ -26,7 +29,7 @@
  * 종료코드: 0 리포트/기록 완료 · 2 도구 오류
  */
 
-import { logEvent, readLog, logPath } from './lib/log.mjs';
+import { logEvent, readLog, logPath, isPairablePrefix } from './lib/log.mjs';
 import { projectRoot, loadConfig } from './lib/config.mjs';
 import {
   readPromotions,
@@ -47,6 +50,10 @@ export const KNOWN_LABELS = [
   'promoted',
   'demoted',
   'fp-reviewed',
+  // 아래 둘은 §6 절차 1(오탐 전수 판정)의 그 자리에서만 붙는다 — 사람이 원문을 이미 보고 있는 곳.
+  // 강등 어휘 밖이다: recurrence 는 규칙이 과잉이라는 뜻이 아니고, caught-defect 는 그 반대다.
+  'recurrence',
+  'caught-defect',
 ];
 
 function median(nums) {
@@ -82,10 +89,13 @@ export function summarize(events) {
   let approved = 0;
   const asks = fires.filter((e) => e.decision === 'ask');
   for (const ask of asks) {
-    const hit = afters.findIndex(
-      (a, i) =>
-        !consumed.has(i) && a.cmdPrefix === ask.cmdPrefix && String(a.ts) >= String(ask.ts),
-    );
+    // 열쇠가 될 수 없는 접두사(빈 값·(unparsed))는 짝을 찾지 않는다 — 승인으로 세지 않는 쪽이 보수적이다.
+    const hit = isPairablePrefix(ask.cmdPrefix)
+      ? afters.findIndex(
+          (a, i) =>
+            !consumed.has(i) && a.cmdPrefix === ask.cmdPrefix && String(a.ts) >= String(ask.ts),
+        )
+      : -1;
     if (hit >= 0) {
       consumed.add(hit);
       approved++;
@@ -110,6 +120,14 @@ export function summarize(events) {
       (r) => String(f.ts).localeCompare(String(r.ts)) <= 0 && (!r.rule || r.rule === f.rule),
     ),
   ).length;
+  // ⭐ 판정 층에서만 나오는 두 수 (docs/13 §4 지표 4 보조 표기 · F24·F25).
+  //    자동 산출을 시도하지 않는다 — 접두사는 "같은 원인" 을 가르는 해상도가 없고(F26 실측:
+  //    한 설치처의 발동 15건 중 13건이 셸 관용구 하나로 뭉쳤다), 재검토가 일어났는지는 로그에
+  //    아예 없다. 사람이 원문을 보는 그 자리(§6 절차 1)에서 붙이는 라벨이 유일하게 정직한 출처다.
+  //    ⚠️ 건수로만 표기하고 비율로 만들지 않는다 — 분모("무엇 대비 재발인가")가 판정 범위에
+  //    따라 흔들려서, 비율로 굳히면 오탐률처럼 고정된 정의를 가진 척하게 된다.
+  const recurrences = notes.filter((n) => n.label === 'recurrence').length;
+  const caughtDefects = notes.filter((n) => n.label === 'caught-defect').length;
   const bootstrapMinutes = notes
     .filter((n) => n.label === 'bootstrap-minutes' && Number.isFinite(n.value))
     .map((n) => n.value);
@@ -130,6 +148,8 @@ export function summarize(events) {
       falsePositives,
       reviewed: reviewedFires,
       unreviewed: fires.length - reviewedFires,
+      recurrences,
+      caughtDefects,
       denominator: passes.length + fires.length,
     },
     cost: { bootstrapMinutes, pass: passes.length, fire: fires.length },
@@ -186,6 +206,14 @@ export function render(s) {
           ` · 분모(검사 총량) ${s.gate.denominator}`
         : missing('게이트를 지난 명령이 아직 없습니다 — 훅 연결을 확인하세요(설정≠연결)')),
   );
+  // 보조 표기 — 판정 층에서만 나오는 두 수. 라벨이 하나도 없으면 줄 자체를 내지 않는다
+  // (0 으로 찍으면 "재발 없음/적발 없음" 으로 읽히는데, 사실은 안 센 것이다 — 공통 규약 4).
+  if (s.gate.recurrences > 0 || s.gate.caughtDefects > 0) {
+    lines.push(
+      `  (판정 층 — 같은 원인 재발 ${s.gate.recurrences}건 · 차단이 결함을 드러냄 ${s.gate.caughtDefects}건` +
+        ` / 판정 완료 ${s.gate.reviewed}건 기준, 비율 아님)`,
+    );
+  }
   lines.push(
     `5 비용/작업      ` +
       (s.cost.bootstrapMinutes.length > 0

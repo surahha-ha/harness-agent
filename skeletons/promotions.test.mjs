@@ -93,6 +93,18 @@ test('fp-reviewed(판정 마커) note 는 rule 을 가리켜도 강등 사유가
   assert.equal(promotionStateFor('r1', [RECORD], [marker], RECORD.pattern).active, true);
 });
 
+test('⭐ recurrence·caught-defect 는 rule 을 가리켜도 강등 사유가 아니다 — 판정 관찰이지 규칙 과잉의 확정이 아니다', () => {
+  for (const name of ['recurrence', 'caught-defect']) {
+    const marker = { ts: ts(11, 0), event: 'note', label: name, rule: 'r1' };
+    assert.equal(DEMOTION_NOTE_LABELS.includes(name), false, `${name} 은 강등 어휘 밖`);
+    assert.equal(
+      promotionStateFor('r1', [RECORD], [marker], RECORD.pattern).active,
+      true,
+      `${name} 이 승격을 실효시키면 안 된다`,
+    );
+  }
+});
+
 test('⭐ 강등 ⓑ — 수동 demoted note 로 즉시 실효', () => {
   const noteEvt = { ts: ts(11, 0), event: 'note', label: 'demoted', rule: 'r1', text: '사유' };
   const s = promotionStateFor('r1', [RECORD], [noteEvt], RECORD.pattern);
