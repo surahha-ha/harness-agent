@@ -25,11 +25,21 @@
  *   node skeletons/metrics.mjs --promotions                     # v2 승격 후보 리포트 + 레코드 상태
  *   node skeletons/metrics.mjs --promote <규칙id> --approved-by <이름>   # 후보 승격 적용(레코드 작성)
  *   node skeletons/metrics.mjs --demote <규칙id> --text "사유"           # 수동 강등 (docs/15 §6 ⓑ)
+ *   node skeletons/metrics.mjs --contract                       # 로그를 스키마 계약(docs/13 §3)에 대고 검사 — 내역
+ *     리포트 말미에도 같은 검사의 요약 한 줄이 항상 붙는다. 값은 찍지 않고 건수·필드명만 낸다(로그는 반출 금지).
  *
- * 종료코드: 0 리포트/기록 완료 · 2 도구 오류
+ * 종료코드: 0 리포트/기록 완료 · 2 도구 오류 · (--contract) 1 계약 위반 있음
  */
 
-import { logEvent, readLog, logPath, isPairablePrefix } from './lib/log.mjs';
+import os from 'node:os';
+import {
+  logEvent,
+  readLog,
+  logPath,
+  isPairablePrefix,
+  normalizeCmdPrefix,
+  UNPARSED_PREFIX,
+} from './lib/log.mjs';
 import { projectRoot, loadConfig } from './lib/config.mjs';
 import {
   readPromotions,
@@ -230,6 +240,152 @@ export function render(s) {
   return lines.join('\n');
 }
 
+// ── 스키마 계약 자가 감사 (docs/13 §3 — F26 의 교훈) ────────────────────────────────
+//
+// "원문을 저장하지 않는다" 류의 계약은 코드가 아니라 **데이터를 뒤져야** 지켜지는지 알 수 있다.
+// 로그는 반출 금지라 아무도 열어 보지 않고, 그래서 위반이 아무도 안 보는 곳에 쌓였다(F26: 첫 토큰
+// 판별 누락으로 절대경로 199건). 이 검사는 리포트를 만들 때마다 로그 전체를 계약에 대고 훑는다 —
+// 정기 감사의 주기를 새로 만들지 않고 이미 있는 리포트 주기에 얹는다.
+//
+// ⭐ 값은 내지 않는다 — 건수와 (이벤트.필드) 이름만. 위반 내역을 찍는 순간 그 출력이 반출 경로가 된다.
+// ⭐ 위반과 관찰을 가른다. 위반 = 계약 문장에 어긋남. 관찰 = 계약 밖이지만 눈에 띄어야 하는 것
+//    (계약 밖 필드, 사람이 쓴 note.text 의 경로 — 사람 서술은 §3 의 대상이 아니지만 같은 반출 위험).
+
+const CONTRACT_EVENTS = ['fire', 'pass', 'after', 'audit', 'note'];
+const CONTRACT_COMMON = ['ts', 'session', 'event'];
+/** 이벤트별 필수·허용 필드 — docs/13 §3 스키마 + 결정 이력의 additive 필드. */
+const CONTRACT_FIELDS = {
+  fire: { req: ['gate', 'rule', 'decision', 'probe', 'cmdPrefix'], opt: ['outcome'] },
+  after: { req: ['gate', 'rule', 'decision', 'probe', 'cmdPrefix'], opt: ['outcome'] },
+  pass: { req: ['gate', 'cmdPrefix'], opt: ['rule', 'promoted'] },
+  audit: { req: ['gate'], opt: [] }, // 수치 필드는 골격마다 다르다 — "수치" 라는 형태만 계약이다
+  note: { req: ['label'], opt: ['text', 'value', 'rule'] },
+};
+const ABS_PATH = /(^|[\s"'=;])([A-Za-z]:[\\/]|\/[A-Za-z]|~\/)/;
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const REGEX_META = /[\\^$()[\]|*+?]/;
+
+function osUser() {
+  try {
+    return os.userInfo().username || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 로그 이벤트를 스키마 계약에 대고 검사한다. 순수 함수(사용자명은 인자로 받는다) — 이 함수를 테스트한다.
+ * @param {object[]} events readLog 가 돌려준 이벤트(깨진 JSON 은 이미 빠져 있다 — broken 은 호출부가 따로 표기)
+ * @param {{ user?: string }} [opts] 원문 흔적 검사에 쓸 OS 사용자명(빈 값이면 그 검사만 생략)
+ * @returns {{ checked: number, folded: number, violations: Record<string, {count:number, where:string[]}>, observations: Record<string, {count:number, where:string[]}> }}
+ */
+export function auditContract(events, opts = {}) {
+  const user = opts.user ?? '';
+  const violations = {};
+  const observations = {};
+  const bump = (bucket, code, where) => {
+    const b = (bucket[code] ||= { count: 0, where: [] });
+    b.count++;
+    if (where && !b.where.includes(where)) b.where.push(where);
+  };
+  const violate = (code, where) => bump(violations, code, where);
+  const observe = (code, where) => bump(observations, code, where);
+
+  let folded = 0;
+  let prevTs = null;
+  for (const e of events) {
+    const t = Date.parse(e.ts);
+    if (!e.ts || Number.isNaN(t)) violate('ts 결손·비ISO');
+    else {
+      if (prevTs !== null && t < prevTs) observe('ts 역행(append 순서와 다름)');
+      prevTs = t;
+    }
+    if ('session' in e && (typeof e.session !== 'string' || !e.session)) violate('session 빈 값');
+
+    if (!CONTRACT_EVENTS.includes(e.event)) {
+      violate('event 어휘 밖', String(e.event));
+      continue;
+    }
+    const spec = CONTRACT_FIELDS[e.event];
+    for (const k of spec.req) if (!(k in e)) violate('필수 필드 결손', `${e.event}.${k}`);
+    if (e.event === 'audit') {
+      for (const k of Object.keys(e))
+        if (!CONTRACT_COMMON.includes(k) && k !== 'gate' && typeof e[k] !== 'number')
+          violate('audit 비수치 필드', `audit.${k}`);
+    } else {
+      const allowed = new Set([...CONTRACT_COMMON, ...spec.req, ...spec.opt]);
+      for (const k of Object.keys(e)) if (!allowed.has(k)) observe('계약 밖 필드', `${e.event}.${k}`);
+    }
+
+    // 접두사 — 정규화의 고정점이어야 한다(정규화한 것을 다시 정규화해도 같다). 아니면 원문이 남은 것이다.
+    if ('cmdPrefix' in e) {
+      const p = e.cmdPrefix;
+      if (typeof p !== 'string' || normalizeCmdPrefix(p) !== p) violate('cmdPrefix 비정규(원문 잔존)', e.event);
+      if (p === UNPARSED_PREFIX) folded++;
+    }
+    // 타입·어휘 검사는 필드가 있을 때만 — 결손은 위에서 한 번만 센다.
+    if (e.event === 'fire' || e.event === 'after') {
+      if ('probe' in e && typeof e.probe !== 'boolean') violate('probe 비불리언', e.event);
+      if ('decision' in e && !['deny', 'ask'].includes(e.decision)) violate('decision 어휘 밖', e.event);
+    }
+    if (e.event === 'pass') {
+      if ('probe' in e || 'decision' in e) violate('pass 에 판정 필드');
+      if (('promoted' in e) !== ('rule' in e) || ('promoted' in e && e.promoted !== true))
+        violate('pass 의 promoted↔rule 불일치');
+    }
+    if (e.event === 'note') {
+      if (!KNOWN_LABELS.includes(e.label)) violate('note.label 어휘 밖', String(e.label));
+      if ('value' in e && typeof e.value !== 'number') violate('note.value 비수치');
+    }
+    if (typeof e.rule === 'string' && REGEX_META.test(e.rule)) observe('rule 이 패턴 원문(id 미부여)', e.event);
+
+    // 원문 흔적 — 문자열 필드 전부. session 은 식별자 그 자체라 제외, note.text 는 사람 서술이라 관찰로.
+    for (const [k, v] of Object.entries(e)) {
+      if (k === 'session' || typeof v !== 'string') continue;
+      const marks = [];
+      if (ABS_PATH.test(v)) marks.push('절대경로');
+      if (UUID.test(v)) marks.push('UUID');
+      if (user && v.includes(user)) marks.push('OS 사용자명');
+      for (const m of marks) {
+        if (e.event === 'note' && k === 'text') observe(`note.text 에 ${m}`);
+        else violate(`원문 흔적(${m})`, `${e.event}.${k}`);
+      }
+    }
+  }
+  return { checked: events.length, folded, violations, observations };
+}
+
+const sumCounts = (bucket) => Object.values(bucket).reduce((n, b) => n + b.count, 0);
+
+/** 리포트 말미의 요약 한 줄. 순수 함수. */
+export function renderContractLine(a) {
+  const v = sumCounts(a.violations);
+  const o = sumCounts(a.observations);
+  return v > 0
+    ? `  ⚠️ 스키마 계약 위반 ${v}건 / ${a.checked} 검사 — --contract 로 내역 (값은 찍지 않습니다)`
+    : `  (계약 — 스키마 위반 0 / ${a.checked} 검사` +
+        (a.folded > 0 ? ` · (unparsed) 접힘 ${a.folded}` : '') +
+        (o > 0 ? ` · 관찰 ${o}` : '') +
+        ')';
+}
+
+/** --contract 내역. 순수 함수 — 문자열 배열. 값은 없고 건수·(이벤트.필드)만. */
+export function renderContract(a) {
+  const lines = [];
+  const section = (title, bucket) => {
+    const codes = Object.keys(bucket).sort();
+    lines.push(`${title} ${sumCounts(bucket)}`);
+    for (const c of codes) {
+      const b = bucket[c];
+      lines.push(`  ${c}: ${b.count}${b.where.length ? ` — ${b.where.sort().join(', ')}` : ''}`);
+    }
+  };
+  section('위반', a.violations);
+  section('관찰', a.observations);
+  if (a.folded > 0) lines.push(`  (unparsed) 접힘 ${a.folded} — 판별 불가 접두사가 접힌 수, 위반 아님(짝짓기 열쇠에서 제외됨)`);
+  return lines;
+}
+
 /**
  * v2 승격 후보 리포트 (docs/15 §4·§8 기준 1). 순수 함수 — 문자열 배열만 돌려준다.
  * ⭐ 후보 0 은 "후보 없음(부족한 축 명시)" 으로 표기한다 — 침묵은 판정이 아니다.
@@ -287,6 +443,24 @@ export function promotionReport(config, events, records) {
 async function main() {
   const argv = process.argv.slice(2);
   const root = projectRoot();
+
+  // ── 스키마 계약 자가 감사 — 내역 (docs/13 §3·§6) ─────────────────────────────
+  if (argv.includes('--contract')) {
+    const { events, broken } = readLog(root);
+    const a = auditContract(events, { user: osUser() });
+    const v = sumCounts(a.violations);
+    process.stdout.write(
+      `[metrics] 스키마 계약 검사 — 이벤트 ${a.checked}${broken > 0 ? ` · 깨진 줄 ${broken}(JSON 아님 — 계약 위반)` : ''} — ${logPath(root)}\n` +
+        renderContract(a)
+          .map((l) => `  ${l}`)
+          .join('\n') +
+        '\n' +
+        (v > 0 || broken > 0
+          ? `  → 위반은 골격 결함이거나 로그 손상입니다. 규범(docs/13 §3)이 아니라 코드를 의심하세요 — F26 의 선례.\n`
+          : ''),
+    );
+    process.exit(v > 0 || broken > 0 ? 1 : 0);
+  }
 
   // ── v2 승격 명령들 (docs/15) ──────────────────────────────────────────────
   if (argv.includes('--promotions')) {
@@ -450,9 +624,14 @@ async function main() {
     process.exit(0);
   }
   const s = summarize(events);
+  // 리포트마다 계약 검사를 얹는다 — 반출 금지 데이터는 아무도 안 열어 보므로, 보는 주기를 따로 만들지 않고
+  // 이미 있는 주기에 붙인다 (docs/13 §3 · F26).
+  const a = auditContract(events, { user: osUser() });
   process.stdout.write(
     `[metrics] 이벤트 ${events.length}${broken > 0 ? ` · 깨진 줄 ${broken}(제외)` : ''} — ${logPath(root)}\n` +
       render(s) +
+      '\n' +
+      renderContractLine(a) +
       '\n',
   );
   process.exit(0);

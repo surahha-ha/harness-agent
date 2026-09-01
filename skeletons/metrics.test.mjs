@@ -10,7 +10,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarize, render, KNOWN_LABELS } from './metrics.mjs';
+import {
+  summarize,
+  render,
+  KNOWN_LABELS,
+  auditContract,
+  renderContract,
+  renderContractLine,
+} from './metrics.mjs';
 
 const t = (m) => `2026-08-18T06:${String(m).padStart(2, '0')}:00Z`;
 const fire = (m, decision, cmdPrefix, probe = false) => ({
@@ -262,4 +269,119 @@ test('⭐ 두 라벨은 오탐률 정의를 건드리지 않는다 — additive'
   assert.equal(withLabels.gate.falsePositives, base.gate.falsePositives);
   assert.equal(withLabels.gate.fires, base.gate.fires);
   assert.equal(withLabels.gate.reviewed, base.gate.reviewed);
+});
+
+// ── 스키마 계약 자가 감사 (docs/13 §3 · F26) ─────────────────────────────────────
+// 여기서 지키는 계약: **계약은 데이터에 대고 검사된다** — 테스트가 계약의 절반만 보고 그린이던
+// F26 의 재발을 막는다. 그리고 **검사 결과에 값이 실리지 않는다** — 위반 내역이 반출 경로가 되면 안 된다.
+
+const okEvents = () => [
+  fire(1, 'deny', 'git push'),
+  pass(2),
+  { ts: t(3), event: 'after', gate: 'danger-guard', rule: 'r', decision: 'ask', probe: false, cmdPrefix: 'git push' },
+  { ts: t(4), event: 'audit', gate: 'test-first', total: 3, inScope: 1, missing: 0 },
+  { ts: t(5), event: 'note', label: 'bootstrap-minutes', value: 7, text: 'first' },
+];
+const violationCount = (a) => Object.values(a.violations).reduce((n, b) => n + b.count, 0);
+const observationCount = (a) => Object.values(a.observations).reduce((n, b) => n + b.count, 0);
+
+test('계약대로 쓰인 5종 이벤트는 위반도 관찰도 0 — 검사 수는 이벤트 수와 같다', () => {
+  const a = auditContract(okEvents(), { user: 'someone' });
+  assert.equal(a.checked, 5);
+  assert.equal(violationCount(a), 0);
+  assert.equal(observationCount(a), 0);
+  assert.equal(a.folded, 0);
+});
+
+test('⭐ F26 형 — 첫 토큰에 절대경로가 실린 접두사는 위반이다 (정규화의 고정점이 아니다)', () => {
+  const bad = { ts: t(1), event: 'pass', gate: 'danger-guard', cmdPrefix: 'VAR="/home/someone/x"; git' };
+  const a = auditContract([bad], { user: 'someone' });
+  assert.ok(a.violations['cmdPrefix 비정규(원문 잔존)'], '정규화하면 (unparsed) 가 될 값이 그대로 있다');
+  assert.ok(a.violations['원문 흔적(절대경로)'], '절대경로 흔적');
+  assert.ok(a.violations['원문 흔적(OS 사용자명)'], '사용자명 흔적');
+  assert.deepEqual(a.violations['원문 흔적(절대경로)'].where, ['pass.cmdPrefix']);
+});
+
+test('접힌 접두사 (unparsed) 는 위반이 아니라 접힘 수로만 센다', () => {
+  const a = auditContract([fire(1, 'deny', '(unparsed)'), pass(2)]);
+  assert.equal(violationCount(a), 0);
+  assert.equal(a.folded, 1);
+});
+
+test('세 토큰이 남아 있으면 위반 — 정규화는 두 토큰까지만 남긴다', () => {
+  const a = auditContract([fire(1, 'deny', 'git push origin')]);
+  assert.ok(a.violations['cmdPrefix 비정규(원문 잔존)']);
+});
+
+test('사용자명 검사는 인자로 받는다 — 빈 값이면 그 검사만 생략되고 나머지는 그대로', () => {
+  const ev = [{ ...pass(1), cmdPrefix: 'someone' }]; // 명령 이름처럼 생겨 정규화는 통과한다
+  assert.equal(violationCount(auditContract(ev)), 0);
+  assert.ok(auditContract(ev, { user: 'someone' }).violations['원문 흔적(OS 사용자명)']);
+});
+
+test('어휘·타입 위반은 각각 이름 붙은 위반으로 잡힌다 (값이 아니라 이벤트·필드명으로)', () => {
+  const a = auditContract([
+    { ts: t(1), event: 'fired', gate: 'danger-guard' },
+    { ...fire(2, 'deny', 'git push'), probe: 'no' },
+    { ...fire(3, 'allow', 'git push') },
+    { ...pass(4), decision: 'deny' },
+    { ...pass(5), rule: 'r' }, // promoted 없이 rule 만
+    { ts: t(6), event: 'audit', gate: 'test-first', total: '3' },
+    { ts: t(7), event: 'note', label: 'fp-reviewd' },
+    { ts: t(8), event: 'note', label: 'bootstrap-minutes', value: '7' },
+    { ts: 'yesterday', event: 'pass', gate: 'danger-guard', cmdPrefix: 'git' },
+    { ts: t(9), session: '', event: 'pass', gate: 'danger-guard', cmdPrefix: 'git' },
+    { ts: t(10), event: 'fire', gate: 'danger-guard' }, // 필수 필드 결손
+  ]);
+  assert.deepEqual(a.violations['event 어휘 밖'].where, ['fired']);
+  assert.equal(a.violations['probe 비불리언'].count, 1);
+  assert.equal(a.violations['decision 어휘 밖'].count, 1);
+  assert.equal(a.violations['pass 에 판정 필드'].count, 1);
+  assert.equal(a.violations['pass 의 promoted↔rule 불일치'].count, 1);
+  assert.deepEqual(a.violations['audit 비수치 필드'].where, ['audit.total']);
+  assert.deepEqual(a.violations['note.label 어휘 밖'].where, ['fp-reviewd']);
+  assert.equal(a.violations['note.value 비수치'].count, 1);
+  assert.equal(a.violations['ts 결손·비ISO'].count, 1);
+  assert.equal(a.violations['session 빈 값'].count, 1);
+  assert.ok(a.violations['필수 필드 결손'].where.includes('fire.cmdPrefix'));
+});
+
+test('승격된 pass(rule + promoted:true)는 계약 안이다 — additive 필드', () => {
+  const a = auditContract([{ ...pass(1), rule: 'r', promoted: true }]);
+  assert.equal(violationCount(a), 0);
+  assert.equal(observationCount(a), 0);
+});
+
+test('⭐ 관찰은 위반으로 세지 않는다 — 계약 밖 필드·ts 역행·사람 서술의 경로·패턴 원문 rule', () => {
+  const a = auditContract(
+    [
+      { ...pass(2), why: 'x' },
+      pass(1), // 역행
+      { ts: t(3), event: 'note', label: 'false-positive', text: 'see /home/someone/log' },
+      { ...fire(4, 'deny', 'git push'), rule: '^git\\s+push' },
+    ],
+    { user: 'someone' },
+  );
+  assert.equal(violationCount(a), 0);
+  assert.deepEqual(a.observations['계약 밖 필드'].where, ['pass.why']);
+  assert.equal(a.observations['ts 역행(append 순서와 다름)'].count, 1);
+  assert.ok(a.observations['note.text 에 절대경로']);
+  assert.ok(a.observations['note.text 에 OS 사용자명']);
+  assert.equal(a.observations['rule 이 패턴 원문(id 미부여)'].count, 1);
+});
+
+test('⭐ 검사 결과 출력에 값이 실리지 않는다 — 위반 내역이 반출 경로가 되면 안 된다', () => {
+  const secret = 'VAR="/home/someone/secret-project"; git';
+  const a = auditContract([{ ...pass(1), cmdPrefix: secret }], { user: 'someone' });
+  const out = [renderContractLine(a), ...renderContract(a)].join('\n');
+  assert.doesNotMatch(out, /secret-project/);
+  assert.doesNotMatch(out, /someone/);
+  assert.match(out, /pass\.cmdPrefix/, '어디서 났는지는 이벤트·필드명으로 말한다');
+});
+
+test('요약 한 줄 — 위반 0 은 "검사했더니 0" 으로, 위반이 있으면 --contract 안내로', () => {
+  const clean = renderContractLine(auditContract([...okEvents(), fire(6, 'deny', '(unparsed)')]));
+  assert.match(clean, /스키마 위반 0 \/ 6 검사 · \(unparsed\) 접힘 1/);
+  const dirty = renderContractLine(auditContract([fire(1, 'deny', 'git push origin')]));
+  assert.match(dirty, /⚠️ 스키마 계약 위반 1건 \/ 1 검사 — --contract/);
 });

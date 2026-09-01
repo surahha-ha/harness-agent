@@ -47,6 +47,7 @@ node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 �
 node .harness/metrics.mjs --note fp-reviewed --rule <규칙id>   # 발동 전수 판정 뒤 경계표 (라벨 0 ≠ 오탐 없음)
 node .harness/metrics.mjs --note recurrence --rule <규칙id>    # 판정 중: 이미 본 것과 같은 원인의 반복
 node .harness/metrics.mjs --note caught-defect --rule <규칙id> # 판정 중: 그 차단이 실제 결함을 드러냄
+node .harness/metrics.mjs --contract      # 로그를 스키마 계약에 대고 검사 — 내역(건수·필드명만, 값 없음). 리포트 말미에도 요약 1줄
 
 # v2 위임 승격 — 습관적 승인만 남은 ask 를 데이터로 allow 로 (docs/15 · promotion 슬롯 채운 뒤)
 node .harness/metrics.mjs --promotions    # 4축 후보 판정 + 승격 레코드 상태
@@ -90,7 +91,9 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 (`docs/14` §7 F25). 이어서 재발률 지표를 설계하려고 실로그로 반증 검사를 하다가 **접두사 정규화가
 "원문을 저장하지 않는다" 계약을 첫 토큰에서 지키지 않고 있던 것**을 찾아 고쳤다(F26 — 계약의 절반만
 테스트하면 나머지 절반은 그린인 채로 무너진다). 지표 자체는 실데이터가 반증해 자동 산출을 포기하고
-판정 층 라벨 2종(`recurrence`·`caught-defect`)으로 옮겼다.
+판정 층 라벨 2종(`recurrence`·`caught-defect`)으로 옮겼다. 그 교훈을 골격에 얹어 **리포트마다 로그를
+스키마 계약에 대고 자가 감사한다**(`--contract` — 감사기를 합성 위반으로 먼저 반증한 뒤 설치처 3곳 실측:
+위반 0, `docs/14` §8).
 
 **v2(위임 확대) 진입 — 승격 기준 설계·기제 구현 완료** — `docs/15-v2-promotion-design.md`(규범 문서).
 위임 승격(ask→allow)은 판정 자동·적용은 사람 1회·강등만 전자동의 비대칭 구조로, 4축 판정식
