@@ -42,7 +42,7 @@ node .harness/test-first.mjs --audit      # 경계 안인데 테스트 없는 �
 node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — 미러 어긋남 검사
 
 # v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
-node .harness/metrics.mjs                 # 지표 5종 리포트 (미수집은 미수집으로 표기)
+node .harness/metrics.mjs                 # 지표 5종 리포트 + v2 턴(게이트 축) (미수집은 미수집으로 표기)
 node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록
 node .harness/metrics.mjs --note fp-reviewed --rule <규칙id>   # 발동 전수 판정 뒤 경계표 (라벨 0 ≠ 오탐 없음)
 node .harness/metrics.mjs --note recurrence --rule <규칙id>    # 판정 중: 이미 본 것과 같은 원인의 반복
@@ -99,6 +99,13 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 위임 승격(ask→allow)은 판정 자동·적용은 사람 1회·강등만 전자동의 비대칭 구조로, 4축 판정식
 (연속 무거부·실패 한도 0·습관적 승인 배제·분산)의 구조만 고정하고 임계값은 프로젝트 슬롯이다.
 기제(후보 리포트·승격 레코드·강등 자동 실효)는 구현·실증됐다(§8 기준 1·2·3·5 그린) —
-남은 것 = 기준 4, 실제 프로젝트의 절차 1건 완주(ask 실데이터 축적 대기).
+남은 것 = 기준 4, 실제 프로젝트의 절차 1건 완주(ask 실데이터 축적 대기 — 사고에서 ask 규칙을 세워
+채우려던 시도는 실로그가 철회시켰다, `docs/14` F27).
+**v2 완료의 측정 정의** — `docs/16-v2-completion-metric.md`(규범 문서). 로드맵의 "개입 없이 완주한
+작업 비율" 은 분모가 없었다(로그에 작업 단위 없음 — 세션 필드가 3641건 전부 비어 있었다). 작업 단위
+후보 셋(세션·커밋·턴)을 실데이터로 반증해 **턴(prompt_id)** 으로 고정하고, 식별자 셋(session·turn·call)을
+훅 페이로드에서 싣도록 골격을 고쳤다. 게이트 축 기준선 실측 = 게이트가 본 턴 377 중 무발동 363(96.3%)
+— **게이트 축만으로는 지표가 움직이지 않는다.** 중단(Stop 훅)·검증 그린(tool_response 실측) 두 축이
+붙기 전에는 v2 완료를 판정하지 않는다.
 
 진행 상태의 SSOT 는 `docs/07-v0-done.md`(v0)·`docs/13-v1-eval-design.md` §7(v1), 방향은 `docs/08-roadmap.md`.

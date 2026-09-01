@@ -48,6 +48,73 @@ test('⭐ after 하나가 ask 두 건의 승인이 되지 않는다', () => {
   assert.equal(s.intervention.unresolved, 1);
 });
 
+// ── 정확 짝짓기 (call) 와 턴 단위 (docs/16) ──────────────────────────────────────
+
+test('⭐ call 이 있으면 같은 도구 호출로만 짝짓는다 — 접두사가 같아도 다른 호출은 짝이 아니다', () => {
+  const s = summarize([
+    { ...fire(1, 'ask', 'git push'), call: 'c1' },
+    { ...after(2, 'git push'), call: 'c2' }, // 다른 호출
+  ]);
+  assert.equal(s.intervention.approved, 0);
+  const t = summarize([{ ...fire(1, 'ask', 'git push'), call: 'c1' }, { ...after(2, 'git push'), call: 'c1' }]);
+  assert.equal(t.intervention.approvedExact, 1);
+  assert.equal(t.intervention.approvedApprox, 0);
+  assert.match(render(t), /승인 1 \(정확 1 · 근사 0\)/);
+});
+
+test('⭐ call 이 있는 ask 는 근사로 떨어지지 않는다 — 옛 after 를 접두사로 집으면 남의 승인이다', () => {
+  const s = summarize([{ ...fire(1, 'ask', 'git push'), call: 'c1' }, after(2, 'git push')]);
+  assert.equal(s.intervention.approved, 0);
+});
+
+test('call 이 없는 옛 로그는 종전 근사 그대로 — 두 수는 따로 보인다(혼합 금지)', () => {
+  const s = summarize([
+    fire(1, 'ask', 'git push'),
+    after(2, 'git push'),
+    { ...fire(3, 'ask', 'docker rm'), call: 'c9' },
+    { ...after(4, 'docker rm'), call: 'c9' },
+  ]);
+  assert.equal(s.intervention.approvedApprox, 1);
+  assert.equal(s.intervention.approvedExact, 1);
+  assert.equal(s.intervention.approved, 2);
+});
+
+test('⭐ v2 턴 — 분모는 게이트가 본 턴, 분자 후보는 발동 없는 턴', () => {
+  const s = summarize([
+    { ...pass(1), turn: 't1' },
+    { ...pass(2), turn: 't1' },
+    { ...fire(3, 'deny', 'x'), turn: 't2' },
+    { ...pass(4), turn: 't3' },
+  ]);
+  assert.deepEqual(s.turns, { gated: 3, fired: 1, quiet: 2, eventsWithoutTurn: 0 });
+  assert.match(render(s), /게이트가 본 턴 3 · 발동 있는 턴 1 → 무발동 턴 2\/3 \(게이트 축만/);
+});
+
+test('⭐ turn 없는 이벤트는 분모에 안 들어가고 제외 수가 보인다 — 옛 로그가 0 으로 둔갑하지 않는다', () => {
+  const s = summarize([pass(1), pass(2), { ...pass(3), turn: 't1' }]);
+  assert.equal(s.turns.gated, 1);
+  assert.equal(s.turns.eventsWithoutTurn, 2);
+  assert.match(render(s), /turn 없는 이벤트 2 제외/);
+  const none = render(summarize([pass(1)]));
+  assert.match(none, /v2 턴\(게이트 축\)\s+미수집/);
+});
+
+test('프로브 발동은 턴 지표에서도 제외된다', () => {
+  const s = summarize([{ ...fire(1, 'deny', 'echo probe', true), turn: 't1' }, { ...pass(2), turn: 't1' }]);
+  assert.equal(s.turns.fired, 0);
+  assert.equal(s.turns.gated, 1);
+});
+
+test('⭐ 계약 검사 — session·turn·call 은 식별자라 원문 흔적(UUID)으로 잡히지 않는다', () => {
+  const a = auditContract([
+    { ...pass(1), session: '550e8400-e29b-41d4-a716-446655440000', turn: '550e8400-e29b-41d4-a716-446655440001', call: 'toolu_01ABC' },
+  ]);
+  assert.equal(violationCount(a), 0);
+  assert.equal(observationCount(a), 0);
+  const bad = auditContract([{ ...pass(2), turn: '' }]);
+  assert.ok(bad.violations['turn 빈 값']);
+});
+
 test('접두사가 다르면 짝이 아니다 — 시간만으로 승인 처리하지 않는다', () => {
   const s = summarize([fire(1, 'ask', 'git push'), after(2, 'docker rm')]);
   assert.equal(s.intervention.approved, 0);

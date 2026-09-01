@@ -94,23 +94,41 @@ export function summarize(events) {
   ).length;
   const driftAudits = sorted.filter((e) => e.event === 'audit' && e.gate === 'drift-watch');
 
-  // 지표 2 — ask 발동마다, 그 뒤 같은 접두사의 after 하나를 짝짓는다(한 번 쓴 after 는 재사용 금지).
+  // 지표 2 — ask 발동마다 after 하나를 짝짓는다(한 번 쓴 after 는 재사용 금지).
+  //   정확: 같은 도구 호출 식별자(call) — 훅 페이로드에서 온 로그만 (docs/16 §4).
+  //   근사: call 이 없는 옛 로그만, 같은 접두사 + 시간 순서. ⚠️ call 이 있는 ask 는 근사로 떨어지지 않는다 —
+  //   그 after 도 call 을 갖고 왔을 것이므로, 접두사로 남의 after 를 집는 쪽이 오차다. 둘은 따로 센다(혼합 금지).
   const consumed = new Set();
-  let approved = 0;
+  let approvedExact = 0;
+  let approvedApprox = 0;
   const asks = fires.filter((e) => e.decision === 'ask');
   for (const ask of asks) {
-    // 열쇠가 될 수 없는 접두사(빈 값·(unparsed))는 짝을 찾지 않는다 — 승인으로 세지 않는 쪽이 보수적이다.
-    const hit = isPairablePrefix(ask.cmdPrefix)
-      ? afters.findIndex(
-          (a, i) =>
-            !consumed.has(i) && a.cmdPrefix === ask.cmdPrefix && String(a.ts) >= String(ask.ts),
-        )
-      : -1;
-    if (hit >= 0) {
-      consumed.add(hit);
-      approved++;
+    let hit = -1;
+    if (ask.call) {
+      hit = afters.findIndex((a, i) => !consumed.has(i) && a.call === ask.call);
+      if (hit >= 0) approvedExact++;
+    } else if (isPairablePrefix(ask.cmdPrefix)) {
+      // 열쇠가 될 수 없는 접두사(빈 값·(unparsed))는 짝을 찾지 않는다 — 승인으로 세지 않는 쪽이 보수적이다.
+      hit = afters.findIndex(
+        (a, i) =>
+          !consumed.has(i) && !a.call && a.cmdPrefix === ask.cmdPrefix && String(a.ts) >= String(ask.ts),
+      );
+      if (hit >= 0) approvedApprox++;
     }
+    if (hit >= 0) consumed.add(hit);
   }
+  const approved = approvedExact + approvedApprox;
+
+  // v2 — 턴 단위 (docs/16). 분모 = 게이트가 본 턴(pass 나 fire 가 하나라도 있는 turn), 분자 후보 = 발동 없는 턴.
+  //   turn 이 없는 이벤트(페이로드 식별자 이전 로그)는 분모에 넣지 않고 **제외 수를 보인다** — 0 으로 둔갑 금지.
+  const gatedTurns = new Set();
+  const firedTurns = new Set();
+  let eventsWithoutTurn = 0;
+  for (const e of [...passes, ...fires]) {
+    if (e.turn) gatedTurns.add(e.turn);
+    else eventsWithoutTurn++;
+  }
+  for (const e of fires) if (e.turn) firedTurns.add(e.turn);
 
   // 지표 3 — 인접 발동 간 시간(분). 발동이 2건 미만이면 잴 수 없다.
   const gaps = [];
@@ -149,7 +167,19 @@ export function summarize(events) {
       first: tfAudits[0] ?? null,
       last: tfAudits[tfAudits.length - 1] ?? null,
     },
-    intervention: { asks: asks.length, approved, unresolved: asks.length - approved },
+    intervention: {
+      asks: asks.length,
+      approved,
+      approvedExact,
+      approvedApprox,
+      unresolved: asks.length - approved,
+    },
+    turns: {
+      gated: gatedTurns.size,
+      fired: firedTurns.size,
+      quiet: gatedTurns.size - firedTurns.size,
+      eventsWithoutTurn,
+    },
     gap: { fires: fires.length, medianMinutes: median(gaps) },
     gate: {
       fires: fires.length,
@@ -193,7 +223,9 @@ export function render(s) {
   lines.push(
     `2 개입 분해      ` +
       (s.intervention.asks > 0
-        ? `ask 발동 ${s.intervention.asks} · 승인(근사) ${s.intervention.approved} · 거부/이탈(구분 불가) ${s.intervention.unresolved}`
+        ? `ask 발동 ${s.intervention.asks} · 승인 ${s.intervention.approved}` +
+          ` (정확 ${s.intervention.approvedExact} · 근사 ${s.intervention.approvedApprox})` +
+          ` · 거부/이탈(구분 불가) ${s.intervention.unresolved}`
         : missing('ask 발동이 아직 없습니다')),
   );
   lines.push(
@@ -230,6 +262,18 @@ export function render(s) {
         ? `부트스트랩 ${s.cost.bootstrapMinutes.join('·')}분 (${s.cost.bootstrapMinutes.length}점) · 검사 pass ${s.cost.pass} · 발동 ${s.cost.fire}`
         : missing('bootstrap-minutes 라벨이 없습니다 — --note bootstrap-minutes --value N 으로 기록하세요')),
   );
+  // v2 — 턴 단위 완주 (docs/16). 게이트 축 하나뿐임을 표기에 박는다 — 중단·검증 그린 축이 붙기 전까지
+  // 이 수는 "개입 없이 완주" 가 아니라 "게이트 발동 없이 지나감" 이다.
+  const t = s.turns;
+  const excluded = t.eventsWithoutTurn > 0 ? ` · turn 없는 이벤트 ${t.eventsWithoutTurn} 제외(식별자 이전 로그)` : '';
+  lines.push(
+    `v2 턴(게이트 축)  ` +
+      (t.gated > 0
+        ? `게이트가 본 턴 ${t.gated} · 발동 있는 턴 ${t.fired} → 무발동 턴 ${t.quiet}/${t.gated}` +
+          ` (게이트 축만 — 중단·검증 그린 축 미수집)` +
+          excluded
+        : missing(`turn 식별자를 가진 이벤트가 0 — 훅 페이로드 식별자 이전 로그입니다${excluded}`)),
+  );
   if (s.probesExcluded > 0) lines.push(`  (프로브 ${s.probesExcluded}건은 전 지표에서 제외)`);
   if (s.promotedPasses > 0)
     lines.push(`  (부가 — 승격 allow 매치 ${s.promotedPasses}건 · --promotions 로 상태 확인)`);
@@ -252,7 +296,9 @@ export function render(s) {
 //    (계약 밖 필드, 사람이 쓴 note.text 의 경로 — 사람 서술은 §3 의 대상이 아니지만 같은 반출 위험).
 
 const CONTRACT_EVENTS = ['fire', 'pass', 'after', 'audit', 'note'];
-const CONTRACT_COMMON = ['ts', 'session', 'event'];
+// session·turn·call 은 환경이 준 식별자다(docs/13 §3 · docs/16) — 원문 흔적 검사(C9)의 대상이 아니다.
+const CONTRACT_COMMON = ['ts', 'session', 'turn', 'call', 'event'];
+const CONTRACT_IDS = ['session', 'turn', 'call'];
 /** 이벤트별 필수·허용 필드 — docs/13 §3 스키마 + 결정 이력의 additive 필드. */
 const CONTRACT_FIELDS = {
   fire: { req: ['gate', 'rule', 'decision', 'probe', 'cmdPrefix'], opt: ['outcome'] },
@@ -300,7 +346,8 @@ export function auditContract(events, opts = {}) {
       if (prevTs !== null && t < prevTs) observe('ts 역행(append 순서와 다름)');
       prevTs = t;
     }
-    if ('session' in e && (typeof e.session !== 'string' || !e.session)) violate('session 빈 값');
+    for (const id of CONTRACT_IDS)
+      if (id in e && (typeof e[id] !== 'string' || !e[id])) violate(`${id} 빈 값`);
 
     if (!CONTRACT_EVENTS.includes(e.event)) {
       violate('event 어휘 밖', String(e.event));
@@ -339,9 +386,9 @@ export function auditContract(events, opts = {}) {
     }
     if (typeof e.rule === 'string' && REGEX_META.test(e.rule)) observe('rule 이 패턴 원문(id 미부여)', e.event);
 
-    // 원문 흔적 — 문자열 필드 전부. session 은 식별자 그 자체라 제외, note.text 는 사람 서술이라 관찰로.
+    // 원문 흔적 — 문자열 필드 전부. 식별자 필드(session·turn·call)는 제외, note.text 는 사람 서술이라 관찰로.
     for (const [k, v] of Object.entries(e)) {
-      if (k === 'session' || typeof v !== 'string') continue;
+      if (CONTRACT_IDS.includes(k) || typeof v !== 'string') continue;
       const marks = [];
       if (ABS_PATH.test(v)) marks.push('절대경로');
       if (UUID.test(v)) marks.push('UUID');

@@ -26,7 +26,7 @@
  */
 
 import { loadConfig, compile, emitDecision, readStdin, CONFIG_NAME } from './lib/config.mjs';
-import { logEvent, normalizeCmdPrefix, readLog } from './lib/log.mjs';
+import { logEvent, normalizeCmdPrefix, readLog, extractContext } from './lib/log.mjs';
 import { readPromotions, promotionStateFor, currentPatternOf } from './lib/promotions.mjs';
 
 /** 기본 복구 문구 — 규칙에 `recover` 가 없을 때. 없는 것보다는 낫지만 규칙마다 적는 편이 훨씬 낫다. */
@@ -195,10 +195,12 @@ async function main() {
   // PostToolUse — ask 발동 뒤 같은 명령이 실제 실행됐다는 행동적 신호를 `after` 로 남긴다.
   // 사람 응답 4갈래를 직접 볼 수 없는 훅의 근사다 (docs/13 §2 — 근사임을 리포트도 표기한다).
   if (argv.includes('--post')) {
-    const command = extractCommand(readStdin());
+    const raw = readStdin();
+    const command = extractCommand(raw);
     const hit = evaluate(command, loaded.config);
     if (hit) {
       logEvent({
+        ...extractContext(raw), // 세션·턴·호출 식별자 — after 는 call 로 fire(ask) 와 정확히 짝지어진다 (docs/16)
         event: 'after',
         gate: 'danger-guard',
         rule: hit.rule,
@@ -212,7 +214,9 @@ async function main() {
 
   const cmdFlag = argv.indexOf('--cmd');
   const fromHook = cmdFlag < 0;
-  const command = cmdFlag >= 0 ? (argv[cmdFlag + 1] ?? '') : extractCommand(readStdin());
+  const raw = fromHook ? readStdin() : '';
+  const command = cmdFlag >= 0 ? (argv[cmdFlag + 1] ?? '') : extractCommand(raw);
+  const context = fromHook ? extractContext(raw) : {};
   const hit = evaluate(command, loaded.config);
 
   // v2 위임 승격 — ask 판정에 유효한 승격 레코드가 있으면 allow 로 처리한다 (docs/15 §5).
@@ -239,6 +243,7 @@ async function main() {
       hit
         ? promoted
           ? {
+              ...context,
               event: 'pass',
               gate: 'danger-guard',
               rule: hit.rule,
@@ -246,6 +251,7 @@ async function main() {
               cmdPrefix: normalizeCmdPrefix(command),
             }
           : {
+              ...context,
               event: 'fire',
               gate: 'danger-guard',
               rule: hit.rule,
@@ -253,7 +259,7 @@ async function main() {
               probe: hit.probe,
               cmdPrefix: normalizeCmdPrefix(command),
             }
-        : { event: 'pass', gate: 'danger-guard', cmdPrefix: normalizeCmdPrefix(command) },
+        : { ...context, event: 'pass', gate: 'danger-guard', cmdPrefix: normalizeCmdPrefix(command) },
     );
   }
 

@@ -66,8 +66,33 @@ export function isPairablePrefix(prefix) {
 }
 
 /**
+ * 훅 입력(stdin JSON)에서 **식별자 셋**을 꺼낸다 — 세션·턴·도구 호출. 순수 함수.
+ *
+ * 환경은 이 셋을 훅 페이로드로 준다(`session_id` · `prompt_id` · `tool_use_id`). 환경변수가 아니다 —
+ * 환경변수만 보던 시절의 로그는 세션 필드가 **0건**이었다(실측: 한 설치처 3641건 전부). 그래서
+ * 작업 단위가 없어 v2 의 "개입 없이 완주한 작업 비율" 을 셀 수 없었다(`docs/16`).
+ *
+ * - `turn` = 프롬프트 한 번(사람이 위임한 단위) — v2 완주율의 **분모 단위**.
+ * - `call` = 도구 호출 하나 — `fire(ask)` ↔ `after` 를 접두사 근사가 아니라 **정확히** 짝짓는 열쇠.
+ * 없는 것은 생략한다(빈 값과 없음을 구분). 파싱 실패면 빈 객체 — 식별자가 없다고 판정을 막지 않는다.
+ * @param {string} raw 훅 stdin 원문
+ * @returns {{session?: string, turn?: string, call?: string}}
+ */
+export function extractContext(raw) {
+  try {
+    const p = JSON.parse(raw);
+    const pick = (v) => (typeof v === 'string' && v ? v : undefined);
+    const ctx = { session: pick(p?.session_id), turn: pick(p?.prompt_id), call: pick(p?.tool_use_id) };
+    return Object.fromEntries(Object.entries(ctx).filter(([, v]) => v !== undefined));
+  } catch {
+    return {};
+  }
+}
+
+/**
  * 이벤트 한 줄을 append 한다. `ts` 는 여기서 찍는다 — 호출부가 시각을 다루지 않게.
- * 세션 식별자는 환경이 주면 싣고, 없으면 필드 자체를 생략한다(빈 값과 없음을 구분).
+ * 세션 식별자는 이벤트에 실려 오면(훅 페이로드 — `extractContext`) 그것을, 아니면 환경변수를 쓰고,
+ * 둘 다 없으면 필드 자체를 생략한다(빈 값과 없음을 구분).
  * @param {object} event `docs/13-v1-eval-design.md` §2 의 5종 중 하나
  * @returns {boolean} 기록 성공 여부 — 실패해도 던지지 않는다(fail-open)
  */
@@ -77,7 +102,7 @@ export function logEvent(event, root = projectRoot()) {
     const session = process.env.CLAUDE_SESSION_ID;
     const line = JSON.stringify({
       ts: new Date().toISOString(),
-      ...(session ? { session } : {}),
+      ...(session && !event.session ? { session } : {}),
       ...event,
     });
     appendFileSync(logPath(root), line + '\n', 'utf8');

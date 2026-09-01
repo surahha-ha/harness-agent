@@ -19,8 +19,49 @@ import {
   readLog,
   logPath,
   isPairablePrefix,
+  extractContext,
   UNPARSED_PREFIX,
 } from './lib/log.mjs';
+
+// ── 식별자 셋 — 훅 페이로드에서 (docs/16) ─────────────────────────────────────────
+
+test('⭐ 세션·턴·호출 식별자는 훅 페이로드에서 온다 — 환경변수가 아니다', () => {
+  const raw = JSON.stringify({
+    session_id: 's1',
+    prompt_id: 'p1',
+    tool_use_id: 'toolu_1',
+    tool_name: 'Bash',
+    tool_input: { command: 'git status' },
+  });
+  assert.deepEqual(extractContext(raw), { session: 's1', turn: 'p1', call: 'toolu_1' });
+});
+
+test('없는 식별자는 필드 자체가 생략된다 — 빈 값과 없음을 구분', () => {
+  assert.deepEqual(extractContext(JSON.stringify({ session_id: 's1', prompt_id: '' })), { session: 's1' });
+  assert.deepEqual(extractContext(JSON.stringify({ tool_input: { command: 'x' } })), {});
+});
+
+test('페이로드가 JSON 이 아니면 빈 객체 — 식별자 부재가 판정을 막지 않는다', () => {
+  assert.deepEqual(extractContext('git status'), {});
+  assert.deepEqual(extractContext(''), {});
+});
+
+test('logEvent 는 이벤트에 실린 session 을 환경변수보다 우선한다', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'harness-log-'));
+  const prev = process.env.CLAUDE_SESSION_ID;
+  process.env.CLAUDE_SESSION_ID = 'from-env';
+  try {
+    logEvent({ session: 'from-payload', turn: 'p1', event: 'pass', gate: 'g', cmdPrefix: 'git' }, root);
+    logEvent({ event: 'pass', gate: 'g', cmdPrefix: 'git' }, root);
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = prev;
+  }
+  const { events } = readLog(root);
+  assert.equal(events[0].session, 'from-payload');
+  assert.equal(events[0].turn, 'p1');
+  assert.equal(events[1].session, 'from-env', '페이로드가 없으면 종전대로 환경변수');
+});
 
 test('접두사 = 첫 토큰 + 첫 서브커맨드', () => {
   assert.equal(normalizeCmdPrefix('git push origin main'), 'git push');
