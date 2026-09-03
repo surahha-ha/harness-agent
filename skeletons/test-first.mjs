@@ -15,6 +15,8 @@
  *
  * 사용:
  *   node skeletons/test-first.mjs --audit          # 켜기 전 선실측 (enabled:false 여도 돈다)
+ *   testFirst.auditOnStop: true                    # 턴 종료마다 같은 선실측을 turn-end.mjs 가 남긴다 —
+ *                                                  #   v2 검증 축의 대체 경로 (docs/16 §5 기준 4). 게이트와 무관한 스위치
  *   node skeletons/test-first.mjs --status         # 활성 확인
  *   node skeletons/test-first.mjs --file <경로>    # 단건 판정
  *   (훅) stdin 으로 도구 입력 JSON — 파일 편집 도구(Write|Edit 매처)에 건다
@@ -177,6 +179,21 @@ export function extractFilePath(raw) {
   return null;
 }
 
+/**
+ * 선실측 한 번 — 추적 파일 전체를 세어 수치만 돌려준다(기록은 호출부 몫). `--audit` 과 턴 종료 훅(`turn-end.mjs`,
+ * `testFirst.auditOnStop`)이 같이 쓴다 — 두 경로의 수치가 같은 함수에서 나와야 시계열이 하나로 이어진다.
+ * @returns {{total:number, inScope:number, missing:number, deny:number, ask:number, list:object[]}}
+ */
+export function runAudit(root, config) {
+  const files = execSync('git ls-files', { cwd: root, encoding: 'utf8' })
+    .split('\n')
+    .filter(Boolean);
+  const a = audit(files, config, realIo(root));
+  const byDecision = { deny: 0, ask: 0 };
+  for (const m of a.missing) byDecision[m.decision]++;
+  return { total: a.total, inScope: a.inScope, missing: a.missing.length, ...byDecision, list: a.missing };
+}
+
 function realIo(root) {
   return {
     fileExists: (rel) => existsSync(path.join(root, rel)),
@@ -235,11 +252,9 @@ async function main() {
   }
 
   if (argv.includes('--audit')) {
-    let files;
+    let a;
     try {
-      files = execSync('git ls-files', { cwd: root, encoding: 'utf8' })
-        .split('\n')
-        .filter(Boolean);
+      a = runAudit(root, loaded.config);
     } catch (e) {
       process.stderr.write(
         `[test-first] 선실측 실패 — git ls-files 를 실행하지 못했습니다 (${e.message.split('\n')[0]}).\n` +
@@ -247,30 +262,27 @@ async function main() {
       );
       process.exit(2);
     }
-    const a = audit(files, loaded.config, realIo(root));
-    const byDecision = { deny: 0, ask: 0 };
-    for (const m of a.missing) byDecision[m.decision]++;
     // 계측 — 선실측 수치를 시계열로 남긴다. 지표 1(완주율)의 원천이다 (docs/13 §4).
     logEvent({
       event: 'audit',
       gate: 'test-first',
       total: a.total,
       inScope: a.inScope,
-      missing: a.missing.length,
-      deny: byDecision.deny,
-      ask: byDecision.ask,
+      missing: a.missing,
+      deny: a.deny,
+      ask: a.ask,
     });
     process.stdout.write(
-      `[test-first] 선실측 — 전체 ${a.total} · 경계 안 ${a.inScope} · 테스트 없음 ${a.missing.length}` +
-        ` (deny ${byDecision.deny} · ask ${byDecision.ask})\n`,
+      `[test-first] 선실측 — 전체 ${a.total} · 경계 안 ${a.inScope} · 테스트 없음 ${a.missing}` +
+        ` (deny ${a.deny} · ask ${a.ask})\n`,
     );
     const SHOW = 20;
-    for (const m of a.missing.slice(0, SHOW)) {
+    for (const m of a.list.slice(0, SHOW)) {
       process.stdout.write(`  ${m.decision}  ${m.path}  ← ${m.what}\n`);
     }
-    if (a.missing.length > SHOW) process.stdout.write(`  … 외 ${a.missing.length - SHOW}건\n`);
+    if (a.list.length > SHOW) process.stdout.write(`  … 외 ${a.list.length - SHOW}건\n`);
     process.stdout.write(
-      a.missing.length > 0
+      a.missing > 0
         ? `  → 이 숫자를 보고 도입 단계(측정→유예→적용→승격)를 정하세요. 0이 아니면 grandfather:true 로 시작하는 것을 권합니다.\n`
         : `  → 기존 위반이 없습니다. enabled:true 로 켜도 첫날 막힐 것이 없습니다.\n`,
     );

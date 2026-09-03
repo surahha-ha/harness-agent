@@ -11,7 +11,7 @@
  * ⭐ 프로브 발동은 모든 지표에서 제외한다 — 검증 신호를 개입으로 세면 지표가 오염된다.
  *
  * 사용:
- *   node skeletons/metrics.mjs                                  # 지표 5종 리포트 + v2 턴(게이트 축·중단 축)
+ *   node skeletons/metrics.mjs                                  # 지표 5종 리포트 + v2 턴(게이트·중단·검증 축) + 완주(세 축)
  *   node skeletons/metrics.mjs --note <label> [--value N] [--text "..."] [--rule <id>]  # 사람 라벨 기록
  *     label: false-positive(오탐 확정) · false-green(거짓 그린 감사) · bootstrap-minutes(부트스트랩 소요)
  *            incident(사고) · promoted/demoted(승격·강등 사실 — 보통 아래 명령이 대신 남긴다)
@@ -158,16 +158,19 @@ export function summarize(events) {
     stopsOutsideGate: 0, // 도구를 안 쓴 턴의 stop — 분모 밖이라 세지 않지만 보이게는 한다
     stopsWithoutTurn: stops.filter((e) => !e.turn).length,
   };
+  const stopVerdict = new Map(); // turn → 'completed' | 'interrupted' | 'undetermined' | 'preHook'
   if (turnEnd.observed) {
     for (const turn of gatedTurns) {
       const info = turnInfo.get(turn);
       if (stoppedTurns.has(turn)) {
         turnEnd.completed++;
+        stopVerdict.set(turn, 'completed');
         if (!firedTurns.has(turn)) turnEnd.bothTrue++;
         continue;
       }
       if (info.last < boundary) {
         turnEnd.preHook++;
+        stopVerdict.set(turn, 'preHook');
         continue;
       }
       const laterTurnInSession =
@@ -177,10 +180,67 @@ export function summarize(events) {
         );
       if (laterTurnInSession) turnEnd.interrupted++;
       else turnEnd.undetermined++;
+      stopVerdict.set(turn, laterTurnInSession ? 'interrupted' : 'undetermined');
     }
     for (const turn of stoppedTurns) if (!gatedTurns.has(turn)) turnEnd.stopsOutsideGate++;
   }
   turnEnd.judged = turnEnd.completed + turnEnd.interrupted;
+
+  // v2 ㄷ 축 — 검증 그린의 **대체 경로** (docs/16 §5 기준 4 · 결정 이력 2026-09-03(3)).
+  //   턴 종료 audit(turn 있음 — turn-end.mjs 가 auditOnStop 으로 남긴다)의 "테스트 없음" 이 시계열상 **직전 audit**
+  //   (턴 유무 무관 — 수동 --audit 도 같은 시계열) 보다 늘지 않았으면 그린, 늘었으면 레드.
+  //   ⭐ 테스트 실행의 그린이 아니다 — 종료코드는 페이로드에 없다(실측 173/173). 표기에 "대체" 를 박는다.
+  //   ⭐ "미달 0" 을 쓰지 않는 이유: 유예(grandfather)된 기존 위반이 있는 설치처는 모든 턴이 영원히 레드가 된다
+  //      (실측: 한 설치처 경계 안 39 · 테스트 없음 27). 턴이 한 일은 늘렸는가/안 늘렸는가다.
+  //   첫 audit(비교 대상 없음) = 미판정 · 그 턴에 turn 있는 audit 없음 = 미수집 · inScope 0 은 경계표 없음이라 시계열 밖.
+  const auditSeries = sorted.filter((e) => e.event === 'audit' && e.gate === 'test-first' && e.inScope > 0);
+  const verify = {
+    observed: auditSeries.some((e) => e.turn),
+    green: 0,
+    red: 0,
+    undetermined: 0,
+    unobserved: 0,
+  };
+  const verifyVerdict = new Map(); // turn → true(그린) | false(레드) | null(미판정)
+  if (verify.observed) {
+    for (const turn of gatedTurns) {
+      let idx = -1;
+      for (let i = auditSeries.length - 1; i >= 0; i--) {
+        if (auditSeries[i].turn === turn) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx < 0) {
+        verify.unobserved++;
+        continue;
+      }
+      if (idx === 0) {
+        verify.undetermined++;
+        verifyVerdict.set(turn, null);
+        continue;
+      }
+      const green = Number(auditSeries[idx].missing) <= Number(auditSeries[idx - 1].missing);
+      verifyVerdict.set(turn, green);
+      if (green) verify.green++;
+      else verify.red++;
+    }
+  }
+  verify.judged = verify.green + verify.red;
+
+  // v2 완주 — 세 축이 **모두 판정된** 턴만 분모로, 셋 다 참인 턴이 분자 (docs/16 §3). 축 하나라도 미판정·미수집이면
+  // 그 턴은 분모에서 빠지고 빠진 수는 각 축 줄에 보인다. 여기서 비로소 "완주" 라는 말을 쓴다.
+  const complete = { observed: turnEnd.observed && verify.observed, judged: 0, done: 0 };
+  if (complete.observed) {
+    for (const turn of gatedTurns) {
+      const sv = stopVerdict.get(turn);
+      const vv = verifyVerdict.get(turn);
+      if ((sv === 'completed' || sv === 'interrupted') && typeof vv === 'boolean') {
+        complete.judged++;
+        if (!firedTurns.has(turn) && sv === 'completed' && vv) complete.done++;
+      }
+    }
+  }
 
   // 지표 3 — 인접 발동 간 시간(분). 발동이 2건 미만이면 잴 수 없다.
   const gaps = [];
@@ -233,6 +293,8 @@ export function summarize(events) {
       eventsWithoutTurn,
     },
     turnEnd,
+    verify,
+    complete,
     gap: { fires: fires.length, medianMinutes: median(gaps) },
     gate: {
       fires: fires.length,
@@ -342,6 +404,29 @@ export function render(s) {
           (te.stopsOutsideGate > 0 ? ` · 게이트 밖 턴의 stop ${te.stopsOutsideGate}(분모 밖)` : '') +
           (te.stopsWithoutTurn > 0 ? ` · ⚠️ turn 없는 stop ${te.stopsWithoutTurn}(계약 위반 — 연결을 의심)` : '')
         : missing('stop 이벤트가 0 — Stop 훅(turn-end.mjs)이 연결되지 않았거나 연결 뒤 끝난 턴이 없습니다')),
+  );
+  // v2 ㄷ 축 — 대체 경로임을 줄 안에 박는다. "검증 그린" 이라는 이름이 테스트 실행 결과로 읽히면 안 된다.
+  const v = s.verify;
+  lines.push(
+    `v2 턴(검증 축)    ` +
+      (v.observed
+        ? `판정 ${v.judged} = 그린 ${v.green} · 레드 ${v.red}` +
+          (v.undetermined > 0 ? ` · 미판정 ${v.undetermined}(첫 audit — 비교 대상 없음)` : '') +
+          (v.unobserved > 0 ? ` · 미수집 ${v.unobserved}(턴 종료 audit 없음)` : '') +
+          ` (대체 경로 — 테스트 없음이 직전 audit 보다 늘지 않음 · 테스트 실행의 그린이 아님)`
+        : missing(
+            'turn 있는 audit 이 0 — testFirst.auditOnStop: true 로 턴 종료 선실측을 켜세요 (골격 2 시계열 대체 경로)',
+          )),
+  );
+  // v2 완주 — 세 축이 다 있을 때만 이 줄이 값을 갖는다.
+  const c = s.complete;
+  const lacking = [!s.turnEnd.observed ? '중단 축' : null, !v.observed ? '검증 축' : null].filter(Boolean);
+  lines.push(
+    `v2 완주(세 축)    ` +
+      (c.observed
+        ? `완주 ${c.done}/${c.judged} — 세 축 모두 판정된 턴 ${c.judged} 기준 (게이트 무발동 ∧ 정상 종료 ∧ 검증 그린(대체))` +
+          (c.judged === 0 ? ' · 아직 세 축이 한 턴에 같이 잡힌 적이 없습니다' : '')
+        : missing(`${lacking.join('·')} 미수집 — 세 축이 다 붙기 전에는 완주율을 내지 않습니다`)),
   );
   if (s.probesExcluded > 0) lines.push(`  (프로브 ${s.probesExcluded}건은 전 지표에서 제외)`);
   if (s.promotedPasses > 0)

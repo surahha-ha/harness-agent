@@ -42,8 +42,9 @@ node .harness/test-first.mjs --audit      # 경계 안인데 테스트 없는 �
 node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — 미러 어긋남 검사
 
 # v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
-node .harness/metrics.mjs                 # 지표 5종 리포트 + v2 턴(게이트 축·중단 축) (미수집은 미수집으로 표기)
+node .harness/metrics.mjs                 # 지표 5종 리포트 + v2 턴(게이트·중단·검증 축) + 완주(세 축) (미수집은 미수집으로 표기)
 node .harness/turn-end.mjs --status       # Stop 훅 연결 확인 — stop 이벤트 건수 (0 이면 중단 축은 관찰 없음)
+#   검증 축은 설정 testFirst.auditOnStop: true (경계표 있는 곳) — 턴 종료마다 선실측 audit 이 같이 남는다
 node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록
 node .harness/metrics.mjs --note fp-reviewed --rule <규칙id>   # 발동 전수 판정 뒤 경계표 (라벨 0 ≠ 오탐 없음)
 node .harness/metrics.mjs --note recurrence --rule <규칙id>    # 판정 중: 이미 본 것과 같은 원인의 반복
@@ -117,6 +118,11 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 턴당 정확히 1회, 정상 종료 22 · 중단 1 · 미판정 1). **중단 축은 구현됐다** — 이벤트 6종째 `stop` 을
 Stop 훅 `turn-end.mjs` 가 남기고, 리포트가 3분기(정상 종료·중단·미판정) + "관찰 이전" 제외로 집계해
 `v2 턴(중단 축)` 줄을 낸다(테스트 181). 전파 당일 설치처 두 곳의 자연 세션에서 stop 6·9건·계약 위반 0 이
-실측돼 **기준 3 🟢**. 남은 것은 검증 그린 축(기준 4 🟡 — 골격 2 `audit` 대체 경로 구현)뿐이다.
+실측돼 **기준 3 🟢**. 검증 그린 축(기준 4)도 같은 날 구현됐다 — 골격 2 를 켜려던 설치처에 같은 경계표의
+프로젝트 자체 훅이 이미 있어(이중 게이트·거짓 활성 위험) 스위치를 게이트와 분리한 `testFirst.auditOnStop`
+으로 두고, 턴 종료 훅이 선실측 `audit` 을 turn 과 함께 남긴다. 턴의 그린은 **"테스트 없음이 직전 audit 보다
+늘지 않음"** 이다(유예된 기존 위반 27 이 있는 곳에서 "미달 0" 은 영원한 레드) — 테스트 실행의 그린이 아니며
+리포트가 "대체 경로" 라고 적는다. 세 축이 다 판정된 턴에서만 `v2 완주(세 축)` 를 센다(테스트 194). 남은 것
+= 실세션 관찰 → 기준 5(첫 2주 기준선).
 
 진행 상태의 SSOT 는 `docs/07-v0-done.md`(v0)·`docs/13-v1-eval-design.md` §7(v1), 방향은 `docs/08-roadmap.md`.

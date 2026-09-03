@@ -558,3 +558,93 @@ test('⭐ 계약 — 제대로 쓰인 stop 은 위반·관찰 0, turn 없는 sto
   // 리포트에서도 turn 없는 stop 은 경고로 보인다 — 연결을 의심하라는 신호
   assert.match(render(summarize([gp(1, 't1'), stop(2, 't1'), { ts: t(3), event: 'stop', gate: 'turn-end' }])), /turn 없는 stop 1\(계약 위반/);
 });
+
+// ── v2 ㄷ 축 — 검증 그린의 대체 경로 (docs/16 §5 기준 4 · 결정 이력 2026-09-03(3)) ────────────────
+// 여기서 지키는 계약: **그린 = 테스트 없음이 직전 audit 보다 늘지 않음**(미달 0 이 아니다 — 유예된 기존 위반이
+// 있는 설치처를 영원히 레드로 만들지 않는다), **첫 audit 은 미판정**, **turn 없는 audit 은 시계열엔 있어도 턴에
+// 붙지 않는다**, **완주는 세 축이 모두 판정된 턴에서만** 세고 그 전에는 그 말을 쓰지 않는다.
+
+const au = (m, turn, missing, session = 's1') => ({
+  ts: t(m), event: 'audit', gate: 'test-first', total: 10, inScope: 5, missing, deny: 0, ask: missing, ...(turn ? { turn, session } : {}),
+});
+const turnDone = (m, turn, missing) => [gp(m, turn), stop(m + 1, turn), au(m + 1, turn, missing)];
+
+test('⭐ 그린 = 직전 audit 보다 테스트 없음이 늘지 않음 · 레드 = 늘어남 · 첫 audit = 미판정', () => {
+  const s = summarize([
+    ...turnDone(1, 't1', 27), // 첫 audit — 비교 대상 없음
+    ...turnDone(3, 't2', 27), // 같음 → 그린
+    ...turnDone(5, 't3', 28), // 늘어남 → 레드
+    ...turnDone(7, 't4', 20), // 줄어듦 → 그린
+  ]);
+  const v = s.verify;
+  assert.equal(v.observed, true);
+  assert.deepEqual({ green: v.green, red: v.red, undetermined: v.undetermined, judged: v.judged }, { green: 2, red: 1, undetermined: 1, judged: 3 });
+  const out = render(s);
+  assert.match(out, /v2 턴\(검증 축\)\s+판정 3 = 그린 2 · 레드 1 · 미판정 1\(첫 audit/);
+  assert.match(out, /대체 경로 — 테스트 없음이 직전 audit 보다 늘지 않음 · 테스트 실행의 그린이 아님/);
+});
+
+test('⭐ 수동 --audit(turn 없음)도 같은 시계열이다 — 비교 대상이 되지만 어느 턴에도 붙지 않는다', () => {
+  const s = summarize([
+    au(0, null, 30), // 수동 선실측
+    ...turnDone(1, 't1', 27), // 직전(수동 30)보다 줄었다 → 그린 (첫 audit 이 아니다)
+    gp(4, 't2'), stop(5, 't2'), // 턴 종료 audit 없음 → 미수집
+  ]);
+  assert.equal(s.verify.green, 1);
+  assert.equal(s.verify.undetermined, 0);
+  assert.equal(s.verify.unobserved, 1);
+  assert.match(render(s), /미수집 1\(턴 종료 audit 없음\)/);
+});
+
+test('⭐ turn 있는 audit 이 0 이면 검증 축은 미수집이고 auditOnStop 안내가 나온다', () => {
+  const s = summarize([gp(1, 't1'), stop(2, 't1'), au(3, null, 5)]);
+  assert.equal(s.verify.observed, false);
+  assert.match(render(s), /v2 턴\(검증 축\)\s+미수집 — turn 있는 audit 이 0 — testFirst\.auditOnStop: true/);
+});
+
+test('경계표 없는 audit(inScope 0)은 시계열 밖 — 비교 대상도 턴 판정도 되지 않는다', () => {
+  const s = summarize([
+    { ...au(0, null, 0), inScope: 0 },
+    ...turnDone(1, 't1', 3), // 앞의 것이 시계열 밖이라 이것이 첫 audit → 미판정
+  ]);
+  assert.equal(s.verify.undetermined, 1);
+  assert.equal(s.verify.judged, 0);
+});
+
+test('⭐ 완주(세 축) — 세 축 모두 판정된 턴만 분모, 셋 다 참만 분자', () => {
+  const s = summarize([
+    ...turnDone(1, 't1', 27), //                      검증 미판정(첫 audit) → 분모 밖
+    ...turnDone(3, 't2', 27), //                      무발동 ∧ 정상 종료 ∧ 그린 → 완주
+    { ...fire(5, 'deny', 'x'), turn: 't3', session: 's1' }, stop(6, 't3'), au(6, 't3', 27), // 발동 → 완주 아님
+    gp(7, 't4'), au(7, 't4', 27), //                  stop 없음, 뒤 턴 있음 → 중단, 그린 → 완주 아님
+    ...turnDone(9, 't5', 28), //                      레드 → 완주 아님
+  ]);
+  assert.deepEqual(s.complete, { observed: true, judged: 4, done: 1 });
+  assert.match(render(s), /v2 완주\(세 축\)\s+완주 1\/4 — 세 축 모두 판정된 턴 4 기준/);
+});
+
+test('⭐ 한 축이라도 미수집이면 완주 줄은 미수집이고 어느 축이 없는지 말한다 — 그 전에는 "완주" 를 세지 않는다', () => {
+  const noVerify = render(summarize([gp(1, 't1'), stop(2, 't1')]));
+  assert.match(noVerify, /v2 완주\(세 축\)\s+미수집 — 검증 축 미수집/);
+  const noStop = render(summarize([gp(1, 't1'), au(2, 't1', 3)]));
+  assert.match(noStop, /v2 완주\(세 축\)\s+미수집 — 중단 축 미수집/);
+  const neither = render(summarize([gp(1, 't1')]));
+  assert.match(neither, /미수집 — 중단 축·검증 축 미수집/);
+});
+
+test('세 축이 있어도 한 턴에 같이 잡힌 적이 없으면 완주 0/0 이라고 그대로 말한다', () => {
+  const s = summarize([
+    gp(1, 't1'), stop(2, 't1'), //          중단 축만
+    gp(3, 't2'), au(4, 't2', 3), //         검증 축(첫 audit → 미판정)
+    gp(5, 't3'), au(6, 't3', 3), //         세션 마지막 → 중단 미판정
+  ]);
+  assert.equal(s.complete.observed, true);
+  assert.equal(s.complete.judged, 0);
+  assert.match(render(s), /완주 0\/0 — .*아직 세 축이 한 턴에 같이 잡힌 적이 없습니다/);
+});
+
+test('turn 이 실린 audit 은 계약 안이다 — 식별자는 공통 필드', () => {
+  const a = auditContract([au(1, 't1', 3)]);
+  assert.equal(violationCount(a), 0);
+  assert.equal(observationCount(a), 0);
+});

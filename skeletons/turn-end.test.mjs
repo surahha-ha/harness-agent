@@ -87,3 +87,77 @@ test('--status: stop 이벤트가 없으면 "관찰 없음" 으로 1, 있으면 
   assert.equal(some.status, 0);
   assert.match(some.stdout, /활성 — stop 이벤트 1건/);
 });
+
+// ── 검증 축 대체 경로 — auditOnStop (docs/16 §5 기준 4) ──────────────────────────────
+// 여기서 지키는 계약: **스위치는 enabled 가 아니라 auditOnStop 하나**(이중 게이트·거짓 활성 없이 시계열만),
+// **audit 은 stop 과 같은 식별자를 싣는다**, **꺼져 있으면 audit 을 남기지 않는다**(미수집은 미수집으로).
+
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { auditOnStop, auditEventFrom } from './turn-end.mjs';
+
+/** 합성 설치처 — 경계 안 파일 하나(테스트 없음)를 가진 git 저장소 + 설정. */
+function siteWith(config) {
+  const root = fresh();
+  mkdirSync(path.join(root, 'src', 'engine'), { recursive: true });
+  writeFileSync(path.join(root, 'src', 'engine', 'calc.ts'), 'export const x = 1;\n', 'utf8');
+  writeFileSync(
+    path.join(root, 'harness.config.mjs'),
+    `export default ${JSON.stringify(config).replace('"__SCOPE__"', '/^src\\/engine\\/.*\\.ts$/')};\n`,
+    'utf8',
+  );
+  spawnSync('git', ['init', '-q'], { cwd: root });
+  spawnSync('git', ['add', '.'], { cwd: root });
+  return root;
+}
+const cfg = (auditOnStopFlag) => ({
+  testFirst: {
+    enabled: false,
+    auditOnStop: auditOnStopFlag,
+    scopes: [{ decision: 'deny', pattern: '__SCOPE__', what: '계산' }],
+    exempt: [],
+  },
+});
+
+test('⭐ 스위치는 testFirst.auditOnStop 하나다 — enabled 는 보지 않는다', () => {
+  assert.equal(auditOnStop({ testFirst: { enabled: true } }), false);
+  assert.equal(auditOnStop({ testFirst: { enabled: false, auditOnStop: true } }), true);
+  assert.equal(auditOnStop({}), false);
+  assert.equal(auditOnStop(null), false);
+});
+
+test('audit 이벤트는 stop 과 같은 session·turn 을 싣고 수치는 --audit 과 같은 다섯 개다', () => {
+  const ev = auditEventFrom(
+    { session: 's-1', turn: 'p-1', event: 'stop', gate: GATE },
+    { total: 10, inScope: 3, missing: 2, deny: 1, ask: 1, list: [{ path: 'x' }] },
+  );
+  assert.deepEqual(ev, { session: 's-1', turn: 'p-1', event: 'audit', gate: 'test-first', total: 10, inScope: 3, missing: 2, deny: 1, ask: 1 });
+  assert.ok(!('list' in ev), '파일 목록(경로 원문)은 로그에 싣지 않는다');
+});
+
+test('⭐ 훅 경로 — auditOnStop:true 면 stop 뒤에 turn 이 실린 audit 이 한 줄 더 남는다', () => {
+  const root = siteWith(cfg(true));
+  const r = run(root, payload());
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  const { events } = readLog(root);
+  assert.deepEqual(events.map((e) => e.event), ['stop', 'audit']);
+  const a = events[1];
+  assert.equal(a.gate, 'test-first');
+  assert.equal(a.turn, 'p-1');
+  assert.equal(a.session, 's-1');
+  assert.equal(a.inScope, 1);
+  assert.equal(a.missing, 1);
+});
+
+test('⭐ auditOnStop 이 꺼져 있으면 stop 만 남는다 — 검증 축은 미수집으로 남는 것이 정직하다', () => {
+  const root = siteWith(cfg(false));
+  run(root, payload());
+  assert.deepEqual(readLog(root).events.map((e) => e.event), ['stop']);
+});
+
+test('설정이 없어도 stop 은 남고 종료코드 0 — 선실측은 있으면 하는 것이지 조건이 아니다', () => {
+  const root = fresh();
+  const r = run(root, payload());
+  assert.equal(r.status, 0);
+  assert.deepEqual(readLog(root).events.map((e) => e.event), ['stop']);
+});
