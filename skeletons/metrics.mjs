@@ -11,7 +11,7 @@
  * ⭐ 프로브 발동은 모든 지표에서 제외한다 — 검증 신호를 개입으로 세면 지표가 오염된다.
  *
  * 사용:
- *   node skeletons/metrics.mjs                                  # 지표 5종 리포트
+ *   node skeletons/metrics.mjs                                  # 지표 5종 리포트 + v2 턴(게이트 축·중단 축)
  *   node skeletons/metrics.mjs --note <label> [--value N] [--text "..."] [--rule <id>]  # 사람 라벨 기록
  *     label: false-positive(오탐 확정) · false-green(거짓 그린 감사) · bootstrap-minutes(부트스트랩 소요)
  *            incident(사고) · promoted/demoted(승격·강등 사실 — 보통 아래 명령이 대신 남긴다)
@@ -84,6 +84,7 @@ export function summarize(events) {
   const passes = sorted.filter((e) => e.event === 'pass');
   const afters = sorted.filter((e) => e.event === 'after' && !e.probe);
   const notes = sorted.filter((e) => e.event === 'note');
+  const stops = sorted.filter((e) => e.event === 'stop');
   // ⭐ 경계표가 비어 있던 audit(inScope 0)은 완주율 시계열에서 뺀다 — "잰 것이 없어 미달 0"
   //    을 "다 닫혀서 미달 0" 으로 읽으면 완주율이 거짓 그린이 된다 (3회차 실적용에서 실측된 결함).
   const tfAudits = sorted.filter(
@@ -129,6 +130,57 @@ export function summarize(events) {
     else eventsWithoutTurn++;
   }
   for (const e of fires) if (e.turn) firedTurns.add(e.turn);
+
+  // v2 ㄴ 축 — 사람 중단 없음 (docs/16 §5.1 실측으로 확정된 3분기). `stop` 은 Stop 훅이 턴마다 남긴다.
+  //   Stop 있음 = 정상 종료 · 없는데 같은 세션에 뒤 턴이 있음 = 중단 · 없고 세션 마지막 턴 = 미판정(관찰 경계).
+  //   ⭐ 마지막 턴을 중단으로 세지 않는다 — 관찰이 끝난 자리와 사람이 끊은 자리는 다르다.
+  //   ⭐ 첫 stop 이전에 끝난 턴은 "관찰 이전" 으로 제외한다 — 훅이 없던 기간을 전부 중단으로 읽으면 창작이다.
+  //   분모는 게이트 축과 같은 "게이트가 본 턴" 이다 — 축이 다르다고 분모를 따로 두면 두 축을 합칠 수 없다.
+  const turnInfo = new Map(); // turn → { session, first, last }
+  for (const e of sorted) {
+    if (!e.turn) continue;
+    const t = String(e.ts);
+    const info = turnInfo.get(e.turn) || { session: e.session, first: t, last: t };
+    if (!info.session && e.session) info.session = e.session;
+    if (t < info.first) info.first = t;
+    if (t > info.last) info.last = t;
+    turnInfo.set(e.turn, info);
+  }
+  const stoppedTurns = new Set(stops.filter((e) => e.turn).map((e) => e.turn));
+  const boundary = stops.length > 0 ? String(stops[0].ts) : null;
+  const turnEnd = {
+    observed: stops.length > 0,
+    completed: 0,
+    interrupted: 0,
+    undetermined: 0,
+    preHook: 0,
+    bothTrue: 0, // 게이트 축 · 중단 축 모두 참 — 아직 완주가 아니다(검증 그린 축 미수집)
+    stopsOutsideGate: 0, // 도구를 안 쓴 턴의 stop — 분모 밖이라 세지 않지만 보이게는 한다
+    stopsWithoutTurn: stops.filter((e) => !e.turn).length,
+  };
+  if (turnEnd.observed) {
+    for (const turn of gatedTurns) {
+      const info = turnInfo.get(turn);
+      if (stoppedTurns.has(turn)) {
+        turnEnd.completed++;
+        if (!firedTurns.has(turn)) turnEnd.bothTrue++;
+        continue;
+      }
+      if (info.last < boundary) {
+        turnEnd.preHook++;
+        continue;
+      }
+      const laterTurnInSession =
+        Boolean(info.session) &&
+        [...turnInfo.entries()].some(
+          ([other, o]) => other !== turn && o.session === info.session && o.first > info.last,
+        );
+      if (laterTurnInSession) turnEnd.interrupted++;
+      else turnEnd.undetermined++;
+    }
+    for (const turn of stoppedTurns) if (!gatedTurns.has(turn)) turnEnd.stopsOutsideGate++;
+  }
+  turnEnd.judged = turnEnd.completed + turnEnd.interrupted;
 
   // 지표 3 — 인접 발동 간 시간(분). 발동이 2건 미만이면 잴 수 없다.
   const gaps = [];
@@ -180,6 +232,7 @@ export function summarize(events) {
       quiet: gatedTurns.size - firedTurns.size,
       eventsWithoutTurn,
     },
+    turnEnd,
     gap: { fires: fires.length, medianMinutes: median(gaps) },
     gate: {
       fires: fires.length,
@@ -274,6 +327,22 @@ export function render(s) {
           excluded
         : missing(`turn 식별자를 가진 이벤트가 0 — 훅 페이로드 식별자 이전 로그입니다${excluded}`)),
   );
+  // v2 ㄴ 축 — 같은 분모(게이트가 본 턴)에 대해 따로 표기한다. 두 축이 모두 참인 수를 내되 "완주" 라
+  // 부르지 않는다 — 검증 그린 축이 아직 없다 (docs/16 §3: 축이 다 붙기 전엔 완주율이라 부르지 않는다).
+  const te = s.turnEnd;
+  lines.push(
+    `v2 턴(중단 축)    ` +
+      (te.observed
+        ? `판정 ${te.judged} = 정상 종료 ${te.completed} · 중단 ${te.interrupted}` +
+          (te.undetermined > 0 ? ` · 미판정 ${te.undetermined}(세션 마지막 턴 — 관찰 경계)` : '') +
+          (te.preHook > 0 ? ` · 관찰 이전 ${te.preHook} 제외(첫 stop 이전 턴)` : '') +
+          (te.judged > 0
+            ? ` → 게이트·중단 두 축 모두 참 ${te.bothTrue}/${te.judged} (완주 아님 — 검증 그린 축 미수집)`
+            : '') +
+          (te.stopsOutsideGate > 0 ? ` · 게이트 밖 턴의 stop ${te.stopsOutsideGate}(분모 밖)` : '') +
+          (te.stopsWithoutTurn > 0 ? ` · ⚠️ turn 없는 stop ${te.stopsWithoutTurn}(계약 위반 — 연결을 의심)` : '')
+        : missing('stop 이벤트가 0 — Stop 훅(turn-end.mjs)이 연결되지 않았거나 연결 뒤 끝난 턴이 없습니다')),
+  );
   if (s.probesExcluded > 0) lines.push(`  (프로브 ${s.probesExcluded}건은 전 지표에서 제외)`);
   if (s.promotedPasses > 0)
     lines.push(`  (부가 — 승격 allow 매치 ${s.promotedPasses}건 · --promotions 로 상태 확인)`);
@@ -295,7 +364,7 @@ export function render(s) {
 // ⭐ 위반과 관찰을 가른다. 위반 = 계약 문장에 어긋남. 관찰 = 계약 밖이지만 눈에 띄어야 하는 것
 //    (계약 밖 필드, 사람이 쓴 note.text 의 경로 — 사람 서술은 §3 의 대상이 아니지만 같은 반출 위험).
 
-const CONTRACT_EVENTS = ['fire', 'pass', 'after', 'audit', 'note'];
+const CONTRACT_EVENTS = ['fire', 'pass', 'after', 'audit', 'note', 'stop'];
 // session·turn·call 은 환경이 준 식별자다(docs/13 §3 · docs/16) — 원문 흔적 검사(C9)의 대상이 아니다.
 const CONTRACT_COMMON = ['ts', 'session', 'turn', 'call', 'event'];
 const CONTRACT_IDS = ['session', 'turn', 'call'];
@@ -306,6 +375,8 @@ const CONTRACT_FIELDS = {
   pass: { req: ['gate', 'cmdPrefix'], opt: ['rule', 'promoted'] },
   audit: { req: ['gate'], opt: [] }, // 수치 필드는 골격마다 다르다 — "수치" 라는 형태만 계약이다
   note: { req: ['label'], opt: ['text', 'value', 'rule'] },
+  // stop 은 턴 종료의 사실 하나뿐이다 — turn 이 없으면 짝지을 수 없으므로 식별자인데도 필수다 (docs/16 §5 기준 3).
+  stop: { req: ['gate', 'turn'], opt: [] },
 };
 const ABS_PATH = /(^|[\s"'=;])([A-Za-z]:[\\/]|\/[A-Za-z]|~\/)/;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -374,6 +445,9 @@ export function auditContract(events, opts = {}) {
     if (e.event === 'fire' || e.event === 'after') {
       if ('probe' in e && typeof e.probe !== 'boolean') violate('probe 비불리언', e.event);
       if ('decision' in e && !['deny', 'ask'].includes(e.decision)) violate('decision 어휘 밖', e.event);
+    }
+    if (e.event === 'stop') {
+      if ('probe' in e || 'decision' in e || 'cmdPrefix' in e) violate('stop 에 판정·명령 필드');
     }
     if (e.event === 'pass') {
       if ('probe' in e || 'decision' in e) violate('pass 에 판정 필드');

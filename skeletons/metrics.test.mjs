@@ -452,3 +452,109 @@ test('요약 한 줄 — 위반 0 은 "검사했더니 0" 으로, 위반이 있�
   const dirty = renderContractLine(auditContract([fire(1, 'deny', 'git push origin')]));
   assert.match(dirty, /⚠️ 스키마 계약 위반 1건 \/ 1 검사 — --contract/);
 });
+
+// ── v2 ㄴ 축 — 사람 중단 없음 (docs/16 §5 기준 3 · §5.1 실측 3분기) ──────────────────────
+// 여기서 지키는 계약: **세션 마지막 턴은 중단이 아니라 미판정**, **첫 stop 이전 턴은 관찰 이전으로 제외**,
+// **stop 이 하나도 없으면 축 전체가 미수집** — 어느 것도 0 이나 중단으로 둔갑하지 않는다.
+
+const stop = (m, turn, session = 's1') => ({ ts: t(m), event: 'stop', gate: 'turn-end', session, turn });
+const gp = (m, turn, session = 's1') => ({ ...pass(m), turn, session });
+
+test('⭐ 3분기 — Stop 있음 = 정상 종료 · 없는데 뒤 턴 있음 = 중단 · 없고 마지막 = 미판정', () => {
+  const s = summarize([
+    gp(1, 't1'), stop(2, 't1'), //          정상 종료
+    gp(3, 't2'), //                         stop 없음, 뒤에 t3 → 중단
+    gp(5, 't3'), stop(6, 't3'), //          정상 종료
+    gp(7, 't4'), //                         stop 없음, 세션 마지막 → 미판정
+  ]);
+  const te = s.turnEnd;
+  assert.equal(te.observed, true);
+  assert.deepEqual(
+    { completed: te.completed, interrupted: te.interrupted, undetermined: te.undetermined, judged: te.judged },
+    { completed: 2, interrupted: 1, undetermined: 1, judged: 3 },
+  );
+  assert.match(render(s), /v2 턴\(중단 축\)\s+판정 3 = 정상 종료 2 · 중단 1 · 미판정 1\(세션 마지막 턴/);
+});
+
+test('⭐ 마지막 턴은 세션 단위다 — 다른 세션의 뒤 턴은 이 세션의 턴을 중단으로 만들지 않는다', () => {
+  const s = summarize([
+    stop(0, 't0'), // 관찰 경계를 열어 둔다
+    gp(1, 'a1', 'sA'), //         sA 마지막 턴, stop 없음
+    gp(2, 'b1', 'sB'), stop(3, 'b1', 'sB'), // 다른 세션의 뒤 턴
+  ]);
+  assert.equal(s.turnEnd.interrupted, 0);
+  assert.equal(s.turnEnd.undetermined, 1);
+});
+
+test('⭐ 첫 stop 이전에 끝난 턴은 "관찰 이전" 으로 제외된다 — 훅 없던 기간을 중단으로 읽으면 창작이다', () => {
+  const s = summarize([
+    gp(1, 't1'), gp(2, 't2'), // 훅 연결 전 — stop 이 있을 수 없다
+    gp(4, 't3'), stop(5, 't3'), // 연결 뒤 첫 stop
+    gp(6, 't4'), gp(7, 't5'), stop(8, 't5'),
+  ]);
+  const te = s.turnEnd;
+  assert.equal(te.preHook, 2);
+  assert.equal(te.interrupted, 1, 't4 만 중단');
+  assert.equal(te.completed, 2);
+  assert.match(render(s), /관찰 이전 2 제외\(첫 stop 이전 턴\)/);
+});
+
+test('⭐ stop 이 0 이면 중단 축은 미수집 — 게이트 축 줄은 그대로 나온다', () => {
+  const s = summarize([gp(1, 't1'), gp(2, 't2')]);
+  assert.equal(s.turnEnd.observed, false);
+  assert.equal(s.turnEnd.judged, 0);
+  const out = render(s);
+  assert.match(out, /v2 턴\(중단 축\)\s+미수집 — stop 이벤트가 0/);
+  assert.match(out, /v2 턴\(게이트 축\)\s+게이트가 본 턴 2/);
+});
+
+test('⭐ 두 축 모두 참인 수는 같은 분모 위에서 나오고 "완주" 라 불리지 않는다 — 검증 그린 축이 없다', () => {
+  const s = summarize([
+    gp(1, 't1'), stop(2, 't1'), //                         무발동 + 정상 종료 → 두 축 참
+    { ...fire(3, 'deny', 'x'), turn: 't2', session: 's1' }, stop(4, 't2'), // 발동 + 정상 종료 → 한 축만
+    gp(5, 't3'), gp(6, 't4'), stop(7, 't4'), //             t3 중단 · t4 무발동 + 정상 종료 → 두 축 참
+  ]);
+  assert.equal(s.turnEnd.bothTrue, 2);
+  assert.equal(s.turnEnd.judged, 4);
+  const out = render(s);
+  assert.match(out, /두 축 모두 참 2\/4 \(완주 아님 — 검증 그린 축 미수집\)/);
+});
+
+test('도구를 안 쓴 턴의 stop 은 분모 밖이지만 보인다 — 질문에 답만 한 턴은 게이트가 본 턴이 아니다', () => {
+  const s = summarize([gp(1, 't1'), stop(2, 't1'), stop(3, 'chat-only')]);
+  assert.equal(s.turnEnd.stopsOutsideGate, 1);
+  assert.equal(s.turnEnd.completed, 1);
+  assert.match(render(s), /게이트 밖 턴의 stop 1\(분모 밖\)/);
+});
+
+test('세션 식별자가 없는 턴은 뒤 턴을 판단할 수 없어 미판정이다 — 중단으로 단정하지 않는다', () => {
+  const s = summarize([
+    stop(0, 't0'),
+    { ...pass(1), turn: 'x1' }, // session 없음
+    { ...pass(2), turn: 'x2' },
+  ]);
+  assert.equal(s.turnEnd.interrupted, 0);
+  assert.equal(s.turnEnd.undetermined, 2);
+});
+
+test('같은 턴에 stop 이 두 번 와도(stop_hook_active 연쇄) 한 턴으로 센다', () => {
+  const s = summarize([gp(1, 't1'), stop(2, 't1'), stop(3, 't1')]);
+  assert.equal(s.turnEnd.completed, 1);
+  assert.equal(s.turnEnd.judged, 1);
+});
+
+test('⭐ 계약 — 제대로 쓰인 stop 은 위반·관찰 0, turn 없는 stop 은 필수 필드 결손, 판정 필드가 실리면 위반', () => {
+  const ok = auditContract([stop(1, 't1')]);
+  assert.equal(violationCount(ok), 0);
+  assert.equal(observationCount(ok), 0);
+  const noTurn = auditContract([{ ts: t(1), event: 'stop', gate: 'turn-end', session: 's1' }]);
+  assert.ok(noTurn.violations['필수 필드 결손']);
+  assert.ok(noTurn.violations['필수 필드 결손'].where.includes('stop.turn'));
+  const withDecision = auditContract([{ ...stop(1, 't1'), decision: 'deny', cmdPrefix: 'git push' }]);
+  assert.ok(withDecision.violations['stop 에 판정·명령 필드']);
+  const extra = auditContract([{ ...stop(1, 't1'), lastMessage: 'hi' }]);
+  assert.equal(violationCount(extra), 0);
+  assert.ok(extra.observations['계약 밖 필드'].where.includes('stop.lastMessage'));
+  // 리포트에서도 turn 없는 stop 은 경고로 보인다 — 연결을 의심하라는 신호
+  assert.match(render(summarize([gp(1, 't1'), stop(2, 't1'), { ts: t(3), event: 'stop', gate: 'turn-end' }])), /turn 없는 stop 1\(계약 위반/);
+});

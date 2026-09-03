@@ -42,7 +42,8 @@ node .harness/test-first.mjs --audit      # 경계 안인데 테스트 없는 �
 node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — 미러 어긋남 검사
 
 # v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
-node .harness/metrics.mjs                 # 지표 5종 리포트 + v2 턴(게이트 축) (미수집은 미수집으로 표기)
+node .harness/metrics.mjs                 # 지표 5종 리포트 + v2 턴(게이트 축·중단 축) (미수집은 미수집으로 표기)
+node .harness/turn-end.mjs --status       # Stop 훅 연결 확인 — stop 이벤트 건수 (0 이면 중단 축은 관찰 없음)
 node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록
 node .harness/metrics.mjs --note fp-reviewed --rule <규칙id>   # 발동 전수 판정 뒤 경계표 (라벨 0 ≠ 오탐 없음)
 node .harness/metrics.mjs --note recurrence --rule <규칙id>    # 판정 중: 이미 본 것과 같은 원인의 반복
@@ -113,6 +114,8 @@ node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
 키 이름·건수만 기록). 검증 그린 축은 **종료코드 필드가 아예 없다는 반증**(173/173)으로 골격 2(`audit`
 시계열) 대체 경로가 고정됐고 — stderr 유무로 그린을 읽어내는 것은 근사가 아니라 창작이라 하지 않는다 —
 중단 축은 `Stop` 페이로드에 `prompt_id` 가 실려 있어 **근사가 아니라 정확한 짝짓기**가 된다(Stop 은
-턴당 정확히 1회, 정상 종료 22 · 중단 1 · 미판정 1). 두 축 모두 상태는 🟡 = 설계 확정·구현 대기.
+턴당 정확히 1회, 정상 종료 22 · 중단 1 · 미판정 1). **중단 축은 구현됐다** — 이벤트 6종째 `stop` 을
+Stop 훅 `turn-end.mjs` 가 남기고, 리포트가 3분기(정상 종료·중단·미판정) + "관찰 이전" 제외로 집계해
+`v2 턴(중단 축)` 줄을 낸다(테스트 181). 설치처 실세션 관찰 1회가 남았고, 검증 그린 축은 🟡 구현 대기.
 
 진행 상태의 SSOT 는 `docs/07-v0-done.md`(v0)·`docs/13-v1-eval-design.md` §7(v1), 방향은 `docs/08-roadmap.md`.

@@ -93,7 +93,7 @@ export function extractContext(raw) {
  * 이벤트 한 줄을 append 한다. `ts` 는 여기서 찍는다 — 호출부가 시각을 다루지 않게.
  * 세션 식별자는 이벤트에 실려 오면(훅 페이로드 — `extractContext`) 그것을, 아니면 환경변수를 쓰고,
  * 둘 다 없으면 필드 자체를 생략한다(빈 값과 없음을 구분).
- * @param {object} event `docs/13-v1-eval-design.md` §2 의 5종 중 하나
+ * @param {object} event `docs/13-v1-eval-design.md` §2 의 6종 중 하나
  * @returns {boolean} 기록 성공 여부 — 실패해도 던지지 않는다(fail-open)
  */
 export function logEvent(event, root = projectRoot()) {

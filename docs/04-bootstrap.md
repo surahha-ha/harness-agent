@@ -84,6 +84,7 @@
 | - | - |
 | 에이전트 도구의 실행 전 훅 | 명령 실행 도구에 `node .harness/danger-guard.mjs` 를 연결. stdin 으로 도구 입력 JSON 을 받는다 |
 | 에이전트 도구의 실행 후 훅 | 같은 도구에 `node .harness/danger-guard.mjs --post` 를 연결 — ask 발동 뒤 실제 실행을 `after` 로 남긴다(v1 지표 2·v2 승격 판정의 입력). 실행 전 훅만 걸면 가드는 돌지만 ask→after 상관은 영원히 "미수집" 이다 — 1회차 설치처가 이 상태로 남아 있던 것을 4회차 점검에서 발견 |
+| 에이전트의 턴 종료 훅 | `node .harness/turn-end.mjs` 를 Stop 훅에 연결(matcher 없음). 턴이 사람의 중단 없이 끝났다는 사실을 `stop` 으로 남긴다 — v2 "개입 없이 완주" 의 중단 축(`docs/16` §5 기준 3)의 유일한 관찰 수단. 게이트가 아니라 아무것도 막지 않는다. 안 걸면 중단 축은 영원히 "미수집" 이고, 걸기 전 턴은 리포트가 "관찰 이전" 으로 제외한다 |
 | git 훅 | `.githooks/pre-commit` 등에서 호출하고 `git config core.hooksPath .githooks` |
 | 셸 래퍼 | 자주 쓰는 위험 명령을 함수로 감싸 가드를 먼저 태운다 |
 
