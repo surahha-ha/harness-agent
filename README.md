@@ -43,6 +43,7 @@ node .harness/drift-watch.mjs             # 짝 선언(drift.mirrors) 후 — �
 
 # v1 계측 — 게이트 판정이 .harness/log.jsonl 에 쌓인다 (커밋 금지 — .gitignore 등록)
 node .harness/metrics.mjs                 # 지표 5종 리포트 + v2 턴(게이트·중단·검증 축) + 완주(세 축) (미수집은 미수집으로 표기)
+node .harness/metrics.mjs --from 2026-09-04 --to 2026-09-18   # v2 턴 줄의 분모를 기간 창으로 (from 포함·to 제외 — 기준선 1점과 그 뒤 창의 비교, 판정 문맥은 전체 로그)
 node .harness/turn-end.mjs --status       # Stop 훅 연결 확인 — stop 이벤트 건수 (0 이면 중단 축은 관찰 없음)
 #   검증 축은 설정 testFirst.auditOnStop: true (경계표 있는 곳) — 턴 종료마다 선실측 audit 이 같이 남는다
 node .harness/metrics.mjs --note bootstrap-minutes --value 7   # 사람 라벨 기록

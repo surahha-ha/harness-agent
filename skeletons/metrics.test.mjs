@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   summarize,
   render,
+  parseWindow,
   KNOWN_LABELS,
   auditContract,
   renderContract,
@@ -86,7 +87,8 @@ test('⭐ v2 턴 — 분모는 게이트가 본 턴, 분자 후보는 발동 없
     { ...fire(3, 'deny', 'x'), turn: 't2' },
     { ...pass(4), turn: 't3' },
   ]);
-  assert.deepEqual(s.turns, { gated: 3, fired: 1, quiet: 2, eventsWithoutTurn: 0 });
+  assert.deepEqual(s.turns, { gated: 3, fired: 1, quiet: 2, eventsWithoutTurn: 0, outsideWindow: 0 });
+  assert.equal(s.window, null, '창을 안 주면 창 표기가 없다 — 누적이 기본');
   assert.match(render(s), /게이트가 본 턴 3 · 발동 있는 턴 1 → 무발동 턴 2\/3 \(게이트 축만/);
 });
 
@@ -647,4 +649,119 @@ test('turn 이 실린 audit 은 계약 안이다 — 식별자는 공통 필드'
   const a = auditContract([au(1, 't1', 3)]);
   assert.equal(violationCount(a), 0);
   assert.equal(observationCount(a), 0);
+});
+
+// ── v2 기간 창 — 기준 5(기준선 1점)와 그 뒤의 "상승" 비교 (docs/16 §5 · 결정 이력 2026-09-04) ──────
+// 여기서 지키는 계약: **창은 분모(턴)만 자르고 판정 문맥은 전체 로그를 본다** — 이벤트를 자르면 창의 마지막 턴은
+// 뒤 턴이 안 보여 미판정, 첫 턴은 직전 audit 을 잃어 미판정이 되어 창 양 끝이 체계적으로 빠진다. **v1 지표는
+// 창을 타지 않는다.** **잘못된 창은 던진다** — 창이 안 걸린 누적이 기준선으로 박히는 쪽이 더 나쁘다.
+
+const win = (fromMin, toMin) => ({
+  from: fromMin === null ? null : Date.parse(t(fromMin)),
+  to: toMin === null ? null : Date.parse(t(toMin)),
+  label: `${fromMin ?? '처음'}~${toMin ?? '끝'}`,
+});
+
+test('⭐ 창은 턴의 첫 이벤트 시각으로 분모를 자르고, 창 밖 턴 수를 보인다', () => {
+  const events = [
+    ...turnDone(1, 't1', 27), // 창 앞
+    ...turnDone(5, 't2', 27), // 창 안
+    ...turnDone(8, 't3', 27), // 창 안
+    ...turnDone(12, 't4', 27), // 창 뒤
+  ];
+  const s = summarize(events, { window: win(4, 10) });
+  assert.equal(s.turns.gated, 2);
+  assert.equal(s.turns.outsideWindow, 2);
+  assert.equal(s.turnEnd.completed, 2);
+  const out = render(s);
+  assert.match(out, /v2 기간 창\s+4~10 에 시작한 턴만 분모 \(창 밖 턴 2 제외 · 판정 문맥은 전체 로그 · v1 지표는 누적\)/);
+  assert.match(out, /게이트가 본 턴 2 · 발동 있는 턴 0/);
+  // 같은 로그를 창 없이 내면 누적 4 — 창이 있을 때만 잘린다
+  assert.equal(summarize(events).turns.gated, 4);
+});
+
+test('⭐ 창의 마지막 턴은 창 밖의 뒤 턴으로 중단 판정된다 — 문맥을 자르면 미판정으로 둔갑한다', () => {
+  const events = [
+    stop(0, 't0'), // 관찰 경계
+    gp(5, 't1'), //          창 안 · stop 없음
+    gp(12, 't2'), stop(13, 't2'), // 창 뒤의 같은 세션 턴 → t1 은 중단
+  ];
+  const s = summarize(events, { window: win(4, 10) });
+  assert.equal(s.turnEnd.interrupted, 1, '창 밖 뒤 턴이 문맥으로 쓰인다');
+  assert.equal(s.turnEnd.undetermined, 0);
+  assert.equal(s.turns.gated, 1);
+});
+
+test('⭐ 창의 첫 턴은 창 밖의 직전 audit 과 비교된다 — 문맥을 자르면 첫 audit 미판정으로 둔갑한다', () => {
+  const events = [
+    ...turnDone(1, 't1', 30), // 창 앞 — 시계열의 첫 audit
+    ...turnDone(5, 't2', 27), // 창 안 — 직전(30)보다 줄었다 → 그린
+    ...turnDone(8, 't3', 28), // 창 안 — 늘었다 → 레드
+  ];
+  const s = summarize(events, { window: win(4, 10) });
+  assert.deepEqual(
+    { green: s.verify.green, red: s.verify.red, undetermined: s.verify.undetermined },
+    { green: 1, red: 1, undetermined: 0 },
+  );
+  assert.deepEqual(s.complete, { observed: true, judged: 2, done: 1 });
+  assert.match(render(s), /v2 완주\(세 축\)\s+완주 1\/2/);
+});
+
+test('첫 stop 경계도 전체 로그에서 온다 — 창 앞의 stop 이 창 안 턴을 "관찰 이전" 에서 꺼내 준다', () => {
+  const events = [
+    gp(1, 't1'), stop(2, 't1'), // 창 앞의 첫 stop
+    gp(5, 't2'), gp(7, 't3'), stop(8, 't3'), // 창 안 — t2 는 중단
+  ];
+  const s = summarize(events, { window: win(4, 10) });
+  assert.equal(s.turnEnd.preHook, 0);
+  assert.equal(s.turnEnd.interrupted, 1);
+});
+
+test('한쪽만 열린 창(--from 만 · --to 만)도 동작한다', () => {
+  const events = [...turnDone(1, 't1', 5), ...turnDone(5, 't2', 5), ...turnDone(9, 't3', 5)];
+  assert.equal(summarize(events, { window: win(4, null) }).turns.gated, 2);
+  assert.equal(summarize(events, { window: win(null, 4) }).turns.gated, 1);
+});
+
+test('⭐ v1 지표는 창을 타지 않는다 — 발동·오탐률·완주율(audit 시계열)은 누적 정의 그대로', () => {
+  const events = [
+    ...turnDone(1, 't1', 30),
+    { ...fire(2, 'deny', 'x'), turn: 't1', session: 's1' },
+    ...turnDone(5, 't2', 27),
+  ];
+  const whole = summarize(events);
+  const cut = summarize(events, { window: win(4, 10) });
+  assert.equal(cut.gate.fires, whole.gate.fires);
+  assert.equal(cut.gate.denominator, whole.gate.denominator);
+  assert.deepEqual(cut.completion, whole.completion);
+  assert.equal(cut.turns.gated, 1, 'v2 분모만 잘린다');
+});
+
+test('게이트 밖 턴의 stop 도 창 기준으로 센다', () => {
+  const events = [gp(5, 't1'), stop(6, 't1'), stop(7, 'chat-in'), stop(12, 'chat-out')];
+  assert.equal(summarize(events, { window: win(4, 10) }).turnEnd.stopsOutsideGate, 1);
+  assert.equal(summarize(events).turnEnd.stopsOutsideGate, 2);
+});
+
+test('⭐ parseWindow — 날짜는 UTC 자정, from 포함 · to 제외, 창이 없으면 null', () => {
+  assert.equal(parseWindow([]), null);
+  const w = parseWindow(['--from', '2026-09-04', '--to', '2026-09-18']);
+  assert.equal(w.from, Date.parse('2026-09-04T00:00:00Z'));
+  assert.equal(w.to, Date.parse('2026-09-18T00:00:00Z'));
+  assert.equal(w.label, '2026-09-04 ~ 2026-09-18');
+  // 경계: 09-18 00:00Z 에 시작한 턴은 창 밖(제외), 09-17 23:59:59Z 는 창 안
+  const at = (iso, turn) => [{ ...pass(0), ts: iso, turn, session: 's1' }];
+  assert.equal(summarize([...at('2026-09-18T00:00:00.000Z', 'a')], { window: w }).turns.gated, 0);
+  assert.equal(summarize([...at('2026-09-17T23:59:59.000Z', 'b')], { window: w }).turns.gated, 1);
+  // ISO 일시도 받는다
+  assert.equal(parseWindow(['--from', '2026-09-04T09:00:00Z']).from, Date.parse('2026-09-04T09:00:00Z'));
+  assert.equal(parseWindow(['--to', '2026-09-18']).label, '처음 ~ 2026-09-18');
+});
+
+test('⭐ parseWindow — 잘못된 창은 던진다: 값 없음 · 못 읽는 날짜 · from ≥ to', () => {
+  assert.throws(() => parseWindow(['--from']), /뒤에 날짜가 없습니다/);
+  assert.throws(() => parseWindow(['--from', '--to', '2026-09-18']), /뒤에 날짜가 없습니다/);
+  assert.throws(() => parseWindow(['--from', '지난주']), /날짜로 읽을 수 없습니다/);
+  assert.throws(() => parseWindow(['--from', '2026-09-18', '--to', '2026-09-04']), /보다 앞서야 합니다/);
+  assert.throws(() => parseWindow(['--from', '2026-09-04', '--to', '2026-09-04']), /보다 앞서야 합니다/);
 });

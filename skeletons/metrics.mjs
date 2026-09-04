@@ -77,7 +77,43 @@ function median(nums) {
  * 지표 5종을 계산한다. 순수 함수 — 이 함수 자체를 테스트한다.
  * @param {object[]} events 로그 이벤트 (ts 순서는 여기서 정렬한다)
  */
-export function summarize(events) {
+/**
+ * 기간 창 인자(`--from`·`--to`)를 해석한다. 값은 `YYYY-MM-DD` 또는 ISO 일시. from 은 포함, to 는 **제외**
+ * (`--from 2026-09-04 --to 2026-09-18` = 09-04 00:00Z 부터 09-18 00:00Z 직전까지 — 2주가 날짜 그대로 읽힌다).
+ * 잘못된 값은 조용히 무시하지 않고 던진다 — 창이 안 걸린 채 누적이 나오면 기준선을 잘못 잡는다.
+ * @returns {{from: number|null, to: number|null, label: string}|null} 창이 없으면 null
+ */
+export function parseWindow(argv) {
+  const pick = (flag) => {
+    const i = argv.indexOf(flag);
+    if (i < 0) return null;
+    const raw = argv[i + 1];
+    if (!raw || raw.startsWith('--')) throw new Error(`${flag} 뒤에 날짜가 없습니다 (YYYY-MM-DD 또는 ISO 일시)`);
+    const ms = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00Z` : raw);
+    if (!Number.isFinite(ms)) throw new Error(`${flag} 값을 날짜로 읽을 수 없습니다: "${raw}"`);
+    return { ms, raw };
+  };
+  const from = pick('--from');
+  const to = pick('--to');
+  if (!from && !to) return null;
+  if (from && to && from.ms >= to.ms) throw new Error(`--from(${from.raw}) 이 --to(${to.raw}) 보다 앞서야 합니다`);
+  return {
+    from: from ? from.ms : null,
+    to: to ? to.ms : null,
+    label: `${from ? from.raw : '처음'} ~ ${to ? to.raw : '끝'}`,
+  };
+}
+
+/**
+ * @param {object[]} events 로그 이벤트
+ * @param {{window?: {from: number|null, to: number|null, label: string}|null}} [opts]
+ *   window — v2 턴 줄의 **분모만** 자른다: 턴의 첫 이벤트 시각이 [from, to) 안인 턴. 판정 문맥(같은 세션의
+ *   뒤 턴, 시계열상 직전 audit, 첫 stop 경계)은 전체 로그를 본다 — 이벤트를 잘라 버리면 창의 마지막 턴은
+ *   뒤 턴이 안 보여 미판정이 되고 첫 턴은 직전 audit 을 잃어 미판정이 된다(창 양 끝이 체계적으로 빠진다).
+ *   v1 지표 5종은 창을 타지 않는다(누적 정의 그대로). docs/16 결정 이력 2026-09-04.
+ */
+export function summarize(events, opts = {}) {
+  const window = opts.window ?? null;
   const sorted = [...events].sort((x, y) => String(x.ts).localeCompare(String(y.ts)));
   const fires = sorted.filter((e) => e.event === 'fire' && !e.probe);
   const probes = sorted.filter((e) => (e.event === 'fire' || e.event === 'after') && e.probe);
@@ -122,11 +158,11 @@ export function summarize(events) {
 
   // v2 — 턴 단위 (docs/16). 분모 = 게이트가 본 턴(pass 나 fire 가 하나라도 있는 turn), 분자 후보 = 발동 없는 턴.
   //   turn 이 없는 이벤트(페이로드 식별자 이전 로그)는 분모에 넣지 않고 **제외 수를 보인다** — 0 으로 둔갑 금지.
-  const gatedTurns = new Set();
+  const allGatedTurns = new Set();
   const firedTurns = new Set();
   let eventsWithoutTurn = 0;
   for (const e of [...passes, ...fires]) {
-    if (e.turn) gatedTurns.add(e.turn);
+    if (e.turn) allGatedTurns.add(e.turn);
     else eventsWithoutTurn++;
   }
   for (const e of fires) if (e.turn) firedTurns.add(e.turn);
@@ -146,6 +182,15 @@ export function summarize(events) {
     if (t > info.last) info.last = t;
     turnInfo.set(e.turn, info);
   }
+  // 기간 창 — 턴이 분모에 드는 시각(첫 이벤트)이 창 안인 턴만 분모. 문맥(turnInfo·stops·audit 시계열)은 전체.
+  const inWindow = (turn) => {
+    if (!window) return true;
+    const ms = Date.parse(turnInfo.get(turn)?.first);
+    if (!Number.isFinite(ms)) return false; // ts 를 못 읽는 턴은 창 안이라고 단정하지 않는다
+    return (window.from === null || ms >= window.from) && (window.to === null || ms < window.to);
+  };
+  const gatedTurns = new Set([...allGatedTurns].filter(inWindow));
+  const turnsOutsideWindow = allGatedTurns.size - gatedTurns.size;
   const stoppedTurns = new Set(stops.filter((e) => e.turn).map((e) => e.turn));
   const boundary = stops.length > 0 ? String(stops[0].ts) : null;
   const turnEnd = {
@@ -182,7 +227,7 @@ export function summarize(events) {
       else turnEnd.undetermined++;
       stopVerdict.set(turn, laterTurnInSession ? 'interrupted' : 'undetermined');
     }
-    for (const turn of stoppedTurns) if (!gatedTurns.has(turn)) turnEnd.stopsOutsideGate++;
+    for (const turn of stoppedTurns) if (!allGatedTurns.has(turn) && inWindow(turn)) turnEnd.stopsOutsideGate++;
   }
   turnEnd.judged = turnEnd.completed + turnEnd.interrupted;
 
@@ -288,10 +333,12 @@ export function summarize(events) {
     },
     turns: {
       gated: gatedTurns.size,
-      fired: firedTurns.size,
-      quiet: gatedTurns.size - firedTurns.size,
+      fired: [...gatedTurns].filter((turn) => firedTurns.has(turn)).length,
+      quiet: [...gatedTurns].filter((turn) => !firedTurns.has(turn)).length,
       eventsWithoutTurn,
+      outsideWindow: turnsOutsideWindow,
     },
+    window: window ? { label: window.label } : null,
     turnEnd,
     verify,
     complete,
@@ -381,6 +428,12 @@ export function render(s) {
   // 이 수는 "개입 없이 완주" 가 아니라 "게이트 발동 없이 지나감" 이다.
   const t = s.turns;
   const excluded = t.eventsWithoutTurn > 0 ? ` · turn 없는 이벤트 ${t.eventsWithoutTurn} 제외(식별자 이전 로그)` : '';
+  // 기간 창 — 아래 v2 턴 줄들의 분모가 잘렸음을 그 줄들 앞에 박는다. 창 밖 턴 수를 보여 누적과 헷갈리지 않게 한다.
+  if (s.window) {
+    lines.push(
+      `v2 기간 창        ${s.window.label} 에 시작한 턴만 분모 (창 밖 턴 ${t.outsideWindow} 제외 · 판정 문맥은 전체 로그 · v1 지표는 누적)`,
+    );
+  }
   lines.push(
     `v2 턴(게이트 축)  ` +
       (t.gated > 0
@@ -829,7 +882,14 @@ async function main() {
     );
     process.exit(0);
   }
-  const s = summarize(events);
+  let window = null;
+  try {
+    window = parseWindow(argv);
+  } catch (err) {
+    process.stderr.write(`[metrics] 기간 창 오류 — ${err.message}\n  창 없이 누적을 내지 않습니다 (기준선을 잘못 잡는 쪽이 더 나쁘다).\n`);
+    process.exit(2);
+  }
+  const s = summarize(events, { window });
   // 리포트마다 계약 검사를 얹는다 — 반출 금지 데이터는 아무도 안 열어 보므로, 보는 주기를 따로 만들지 않고
   // 이미 있는 주기에 붙인다 (docs/13 §3 · F26).
   const a = auditContract(events, { user: osUser() });
