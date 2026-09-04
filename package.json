@@ -1,0 +1,9 @@
+{
+  "name": "harness-agent",
+  "private": true,
+  "description": "Skeleton hooks and metrics for a coding-agent harness. `npm test` runs the explicit test globs on purpose: a bare `node --test` picks up skeletons/test-first.mjs (it matches Node's default `test-*` discovery pattern) and runs the guard itself as a test.",
+  "scripts": {
+    "test": "node --test skeletons/*.test.mjs tools/*.test.mjs",
+    "scan": "node tools/scan-forbidden.mjs --all"
+  }
+}

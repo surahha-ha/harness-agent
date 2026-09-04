@@ -65,7 +65,9 @@ node .harness/metrics.mjs --demote <규칙id> --text "사유"           # 수동
 ```bash
 git config core.hooksPath .githooks                              # 유입 차단 게이트 활성화
 node tools/scan-forbidden.mjs --all                              # 저장소 전체 스캔
-node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트
+node --test skeletons/*.test.mjs tools/*.test.mjs                # 테스트 (= npm test)
+#   ⚠️ 인자 없는 `node --test` 는 쓰지 않는다 — skeletons/test-first.mjs 가 Node 기본 탐색 패턴 `test-*` 에 걸려
+#   가드 본체가 테스트로 실행되고(설정 없음 → exit 1) 1건 실패로 보인다. 골격 이름은 훅·문서에 박혀 있어 바꾸지 않는다.
 ```
 
 프로젝트 고유 금칙어(조직명·호스트·식별자 접두어)는 **`.forbidden-terms.local` 에 두고 커밋하지 않는다** —
